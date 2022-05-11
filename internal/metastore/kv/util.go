@@ -1,12 +1,14 @@
-package model
+package kv
 
 import (
+	"github.com/milvus-io/milvus/internal/metastore/model"
 	pb "github.com/milvus-io/milvus/internal/proto/etcdpb"
 	"github.com/milvus-io/milvus/internal/proto/internalpb"
 	"github.com/milvus-io/milvus/internal/proto/schemapb"
 )
 
-func ConvertToFieldSchemaPB(field *Field) *schemapb.FieldSchema {
+// model <---> etcdpb
+func ConvertToFieldSchemaPB(field *model.Field) *schemapb.FieldSchema {
 	return &schemapb.FieldSchema{
 		FieldID:      field.FieldID,
 		Name:         field.Name,
@@ -19,7 +21,7 @@ func ConvertToFieldSchemaPB(field *Field) *schemapb.FieldSchema {
 	}
 }
 
-func BatchConvertToFieldSchemaPB(fields []*Field) []*schemapb.FieldSchema {
+func BatchConvertToFieldSchemaPB(fields []*model.Field) []*schemapb.FieldSchema {
 	fieldSchemas := make([]*schemapb.FieldSchema, len(fields))
 	for idx, field := range fields {
 		fieldSchemas[idx] = ConvertToFieldSchemaPB(field)
@@ -27,8 +29,8 @@ func BatchConvertToFieldSchemaPB(fields []*Field) []*schemapb.FieldSchema {
 	return fieldSchemas
 }
 
-func ConvertFieldPBToModel(fieldSchema *schemapb.FieldSchema) *Field {
-	return &Field{
+func ConvertFieldPBToModel(fieldSchema *schemapb.FieldSchema) *model.Field {
+	return &model.Field{
 		FieldID:      fieldSchema.FieldID,
 		Name:         fieldSchema.Name,
 		IsPrimaryKey: fieldSchema.IsPrimaryKey,
@@ -40,31 +42,31 @@ func ConvertFieldPBToModel(fieldSchema *schemapb.FieldSchema) *Field {
 	}
 }
 
-func BatchConvertFieldPBToModel(fieldSchemas []*schemapb.FieldSchema) []*Field {
-	fields := make([]*Field, len(fieldSchemas))
+func BatchConvertFieldPBToModel(fieldSchemas []*schemapb.FieldSchema) []*model.Field {
+	fields := make([]*model.Field, len(fieldSchemas))
 	for idx, fieldSchema := range fieldSchemas {
 		fields[idx] = ConvertFieldPBToModel(fieldSchema)
 	}
 	return fields
 }
 
-func ConvertCollectionPBToModel(coll *pb.CollectionInfo, extra map[string]string) *Collection {
-	partitions := make([]*Partition, len(coll.PartitionIDs))
+func ConvertCollectionPBToModel(coll *pb.CollectionInfo, extra map[string]string) *model.Collection {
+	partitions := make([]*model.Partition, len(coll.PartitionIDs))
 	for idx := range coll.PartitionIDs {
-		partitions[idx] = &Partition{
+		partitions[idx] = &model.Partition{
 			PartitionID:               coll.PartitionIDs[idx],
 			PartitionName:             coll.PartitionNames[idx],
 			PartitionCreatedTimestamp: coll.PartitionCreatedTimestamps[idx],
 		}
 	}
-	indexes := make([]*Index, len(coll.FieldIndexes))
+	indexes := make([]*model.Index, len(coll.FieldIndexes))
 	for idx, fieldIndexInfo := range coll.FieldIndexes {
-		indexes[idx] = &Index{
+		indexes[idx] = &model.Index{
 			FieldID: fieldIndexInfo.FiledID,
 			IndexID: fieldIndexInfo.IndexID,
 		}
 	}
-	return &Collection{
+	return &model.Collection{
 		CollectionID:         coll.ID,
 		Name:                 coll.Schema.Name,
 		Description:          coll.Schema.Description,
@@ -81,8 +83,8 @@ func ConvertCollectionPBToModel(coll *pb.CollectionInfo, extra map[string]string
 	}
 }
 
-func CloneCollectionModel(coll Collection) *Collection {
-	return &Collection{
+func CloneCollectionModel(coll model.Collection) *model.Collection {
+	return &model.Collection{
 		CollectionID:         coll.CollectionID,
 		Name:                 coll.Name,
 		Description:          coll.Description,
@@ -99,7 +101,7 @@ func CloneCollectionModel(coll Collection) *Collection {
 	}
 }
 
-func ConvertToCollectionPB(coll *Collection) *pb.CollectionInfo {
+func ConvertToCollectionPB(coll *model.Collection) *pb.CollectionInfo {
 	fields := make([]*schemapb.FieldSchema, len(coll.Fields))
 	for idx, field := range coll.Fields {
 		fields[idx] = &schemapb.FieldSchema{
@@ -149,7 +151,7 @@ func ConvertToCollectionPB(coll *Collection) *pb.CollectionInfo {
 	}
 }
 
-func ConvertToSegmentIndexPB(index *Index) *pb.SegmentIndexInfo {
+func ConvertToSegmentIndexPB(index *model.Index) *pb.SegmentIndexInfo {
 	return &pb.SegmentIndexInfo{
 		CollectionID: index.CollectionID,
 		PartitionID:  index.PartitionID,
@@ -161,8 +163,8 @@ func ConvertToSegmentIndexPB(index *Index) *pb.SegmentIndexInfo {
 	}
 }
 
-func ConvertSegmentIndexPBToModel(segIndex *pb.SegmentIndexInfo) *Index {
-	return &Index{
+func ConvertSegmentIndexPBToModel(segIndex *pb.SegmentIndexInfo) *model.Index {
+	return &model.Index{
 		CollectionID: segIndex.CollectionID,
 		PartitionID:  segIndex.PartitionID,
 		SegmentID:    segIndex.SegmentID,
@@ -173,15 +175,15 @@ func ConvertSegmentIndexPBToModel(segIndex *pb.SegmentIndexInfo) *Index {
 	}
 }
 
-func ConvertIndexPBToModel(indexInfo *pb.IndexInfo) *Index {
-	return &Index{
+func ConvertIndexPBToModel(indexInfo *pb.IndexInfo) *model.Index {
+	return &model.Index{
 		IndexName:   indexInfo.IndexName,
 		IndexID:     indexInfo.IndexID,
 		IndexParams: indexInfo.IndexParams,
 	}
 }
 
-func ConvertToIndexPB(index *Index) *pb.IndexInfo {
+func ConvertToIndexPB(index *model.Index) *pb.IndexInfo {
 	return &pb.IndexInfo{
 		IndexName:   index.IndexName,
 		IndexID:     index.IndexID,
@@ -189,7 +191,7 @@ func ConvertToIndexPB(index *Index) *pb.IndexInfo {
 	}
 }
 
-func ConvertToCredentialPB(cred *Credential) *internalpb.CredentialInfo {
+func ConvertToCredentialPB(cred *model.Credential) *internalpb.CredentialInfo {
 	if cred == nil {
 		return nil
 	}

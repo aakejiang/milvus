@@ -14,15 +14,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package rootcoord
+package metastore
 
 import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/milvus-io/milvus/internal/metastore/model"
-
 	"github.com/golang/protobuf/proto"
+	"github.com/milvus-io/milvus/internal/metastore/model"
 	"github.com/milvus-io/milvus/internal/mq/msgstream"
 	"github.com/milvus-io/milvus/internal/proto/commonpb"
 	"github.com/milvus-io/milvus/internal/util/typeutil"
@@ -126,4 +125,13 @@ func DecodeMsgPositions(str string, msgPositions *[]*msgstream.MsgPosition) erro
 		return nil
 	}
 	return json.Unmarshal([]byte(str), msgPositions)
+}
+
+// ConvertInterfaceSlice slice conversion
+func ConvertInterfaceSlice(a []interface{}) []string {
+	ret := make([]string, len(a), len(a))
+	for i := range a {
+		ret[i] = a[i].(string)
+	}
+	return ret
 }

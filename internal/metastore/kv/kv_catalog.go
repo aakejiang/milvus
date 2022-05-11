@@ -8,6 +8,8 @@ import (
 	"path"
 	"strconv"
 
+	"github.com/milvus-io/milvus/internal/metastore"
+
 	"github.com/golang/protobuf/proto"
 	"github.com/milvus-io/milvus/internal/kv"
 	"github.com/milvus-io/milvus/internal/log"
@@ -25,8 +27,8 @@ type KVCatalog struct {
 }
 
 func (kc *KVCatalog) CreateCollection(ctx context.Context, coll *model.Collection, ts typeutil.Timestamp) error {
-	k1 := fmt.Sprintf("%s/%d", CollectionMetaPrefix, coll.CollectionID)
-	collInfo := model.ConvertToCollectionPB(coll)
+	k1 := fmt.Sprintf("%s/%d", metastore.CollectionMetaPrefix, coll.CollectionID)
+	collInfo := ConvertToCollectionPB(coll)
 	v1, err := proto.Marshal(collInfo)
 	if err != nil {
 		log.Error("marshal fail", zap.String("key", k1), zap.Error(err))
@@ -49,8 +51,8 @@ func (kc *KVCatalog) CreateCollection(ctx context.Context, coll *model.Collectio
 }
 
 func (kc *KVCatalog) CreatePartition(ctx context.Context, coll *model.Collection, ts typeutil.Timestamp) error {
-	k1 := fmt.Sprintf("%s/%d", CollectionMetaPrefix, coll.CollectionID)
-	collInfo := model.ConvertToCollectionPB(coll)
+	k1 := fmt.Sprintf("%s/%d", metastore.CollectionMetaPrefix, coll.CollectionID)
+	collInfo := ConvertToCollectionPB(coll)
 	v1, err := proto.Marshal(collInfo)
 	if err != nil {
 		log.Error("marshal fail", zap.String("key", k1), zap.Error(err))
@@ -75,8 +77,8 @@ func (kc *KVCatalog) CreatePartition(ctx context.Context, coll *model.Collection
 }
 
 func (kc *KVCatalog) CreateIndex(ctx context.Context, segIndex *model.Index) error {
-	k := fmt.Sprintf("%s/%d/%d/%d/%d", SegmentIndexMetaPrefix, segIndex.CollectionID, segIndex.IndexID, segIndex.PartitionID, segIndex.SegmentID)
-	segIdxInfo := model.ConvertToSegmentIndexPB(segIndex)
+	k := fmt.Sprintf("%s/%d/%d/%d/%d", metastore.SegmentIndexMetaPrefix, segIndex.CollectionID, segIndex.IndexID, segIndex.PartitionID, segIndex.SegmentID)
+	segIdxInfo := ConvertToSegmentIndexPB(segIndex)
 	v, err := proto.Marshal(segIdxInfo)
 	if err != nil {
 		log.Error("marshal segIdxInfo fail", zap.String("key", k), zap.Error(err))
@@ -93,7 +95,7 @@ func (kc *KVCatalog) CreateIndex(ctx context.Context, segIndex *model.Index) err
 }
 
 func (kc *KVCatalog) CreateAlias(ctx context.Context, collection *model.Collection, ts typeutil.Timestamp) error {
-	k := fmt.Sprintf("%s/%s", CollectionAliasMetaPrefix, collection.Aliases[0])
+	k := fmt.Sprintf("%s/%s", metastore.CollectionAliasMetaPrefix, collection.Aliases[0])
 	v, err := proto.Marshal(&pb.CollectionInfo{ID: collection.CollectionID, Schema: &schemapb.CollectionSchema{Name: collection.Aliases[0]}})
 	if err != nil {
 		log.Error("marshal CollectionInfo fail", zap.String("key", k), zap.Error(err))
@@ -110,7 +112,7 @@ func (kc *KVCatalog) CreateAlias(ctx context.Context, collection *model.Collecti
 }
 
 func (kc *KVCatalog) CreateCredential(ctx context.Context, credential *model.Credential) error {
-	k := fmt.Sprintf("%s/%s", CredentialPrefix, credential.Username)
+	k := fmt.Sprintf("%s/%s", metastore.CredentialPrefix, credential.Username)
 	v, err := json.Marshal(&internalpb.CredentialInfo{EncryptedPassword: credential.EncryptedPassword})
 	if err != nil {
 		log.Error("marshal credential info fail", zap.String("key", k), zap.Error(err))
@@ -126,7 +128,7 @@ func (kc *KVCatalog) CreateCredential(ctx context.Context, credential *model.Cre
 }
 
 func (kc *KVCatalog) GetCollectionByID(ctx context.Context, collectionID typeutil.UniqueID, ts typeutil.Timestamp) (*model.Collection, error) {
-	collKey := fmt.Sprintf("%s/%d", CollectionMetaPrefix, collectionID)
+	collKey := fmt.Sprintf("%s/%d", metastore.CollectionMetaPrefix, collectionID)
 	collVal, err := kc.Snapshot.Load(collKey, ts)
 	if err != nil {
 		log.Error("SnapShotKV Load fail", zap.Error(err))
@@ -138,7 +140,7 @@ func (kc *KVCatalog) GetCollectionByID(ctx context.Context, collectionID typeuti
 		log.Error("unmarshal collection info fail", zap.String("key", collKey), zap.Error(err))
 		return nil, err
 	}
-	return model.ConvertCollectionPBToModel(collMeta, map[string]string{}), nil
+	return ConvertCollectionPBToModel(collMeta, map[string]string{}), nil
 }
 
 func (kc *KVCatalog) CollectionExists(ctx context.Context, collectionID typeutil.UniqueID, ts typeutil.Timestamp) bool {
@@ -147,7 +149,7 @@ func (kc *KVCatalog) CollectionExists(ctx context.Context, collectionID typeutil
 }
 
 func (kc *KVCatalog) GetCredential(ctx context.Context, username string) (*model.Credential, error) {
-	k := fmt.Sprintf("%s/%s", CredentialPrefix, username)
+	k := fmt.Sprintf("%s/%s", metastore.CredentialPrefix, username)
 	v, err := kc.Txn.Load(k)
 	if err != nil {
 		log.Warn("TxnKV load fail", zap.String("key", k), zap.Error(err))
@@ -168,11 +170,11 @@ func (kc *KVCatalog) AlterAlias(ctx context.Context, collection *model.Collectio
 
 func (kc *KVCatalog) DropCollection(ctx context.Context, collectionInfo *model.Collection, ts typeutil.Timestamp) error {
 	delMetakeysSnap := []string{
-		fmt.Sprintf("%s/%d", CollectionMetaPrefix, collectionInfo.CollectionID),
+		fmt.Sprintf("%s/%d", metastore.CollectionMetaPrefix, collectionInfo.CollectionID),
 	}
 	for _, alias := range collectionInfo.Aliases {
 		delMetakeysSnap = append(delMetakeysSnap,
-			fmt.Sprintf("%s/%s", CollectionAliasMetaPrefix, alias),
+			fmt.Sprintf("%s/%s", metastore.CollectionAliasMetaPrefix, alias),
 		)
 	}
 
@@ -189,8 +191,8 @@ func (kc *KVCatalog) DropCollection(ctx context.Context, collectionInfo *model.C
 	}
 
 	delMetaKeysTxn := []string{
-		fmt.Sprintf("%s/%d", SegmentIndexMetaPrefix, collectionInfo.CollectionID),
-		fmt.Sprintf("%s/%d", IndexMetaPrefix, collectionInfo.CollectionID),
+		fmt.Sprintf("%s/%d", metastore.SegmentIndexMetaPrefix, collectionInfo.CollectionID),
+		fmt.Sprintf("%s/%d", metastore.IndexMetaPrefix, collectionInfo.CollectionID),
 	}
 
 	err = kc.Txn.MultiSaveAndRemoveWithPrefix(kvs, delMetaKeysTxn)
@@ -202,9 +204,9 @@ func (kc *KVCatalog) DropCollection(ctx context.Context, collectionInfo *model.C
 }
 
 func (kc *KVCatalog) DropPartition(ctx context.Context, collectionInfo *model.Collection, partitionID typeutil.UniqueID, ts typeutil.Timestamp) error {
-	collMeta := model.ConvertToCollectionPB(collectionInfo)
+	collMeta := ConvertToCollectionPB(collectionInfo)
 
-	k := path.Join(CollectionMetaPrefix, strconv.FormatInt(collectionInfo.CollectionID, 10))
+	k := path.Join(metastore.CollectionMetaPrefix, strconv.FormatInt(collectionInfo.CollectionID, 10))
 	v, err := proto.Marshal(collMeta)
 	if err != nil {
 		log.Error("MetaTable DeletePartition Marshal collectionMeta fail",
@@ -220,7 +222,7 @@ func (kc *KVCatalog) DropPartition(ctx context.Context, collectionInfo *model.Co
 
 	var delMetaKeys []string
 	for _, idxInfo := range collMeta.FieldIndexes {
-		k := fmt.Sprintf("%s/%d/%d/%d", SegmentIndexMetaPrefix, collMeta.ID, idxInfo.IndexID, partitionID)
+		k := fmt.Sprintf("%s/%d/%d/%d", metastore.SegmentIndexMetaPrefix, collMeta.ID, idxInfo.IndexID, partitionID)
 		delMetaKeys = append(delMetaKeys, k)
 	}
 
@@ -239,9 +241,9 @@ func (kc *KVCatalog) DropPartition(ctx context.Context, collectionInfo *model.Co
 }
 
 func (kc *KVCatalog) DropIndex(ctx context.Context, collectionInfo *model.Collection, dropIdxID typeutil.UniqueID, ts typeutil.Timestamp) error {
-	collMeta := model.ConvertToCollectionPB(collectionInfo)
+	collMeta := ConvertToCollectionPB(collectionInfo)
 
-	k := path.Join(CollectionMetaPrefix, strconv.FormatInt(collectionInfo.CollectionID, 10))
+	k := path.Join(metastore.CollectionMetaPrefix, strconv.FormatInt(collectionInfo.CollectionID, 10))
 	v, err := proto.Marshal(collMeta)
 	if err != nil {
 		log.Error("MetaTable DropIndex Marshal collMeta fail",
@@ -251,8 +253,8 @@ func (kc *KVCatalog) DropIndex(ctx context.Context, collectionInfo *model.Collec
 	saveMeta := map[string]string{k: string(v)}
 
 	delMeta := []string{
-		fmt.Sprintf("%s/%d/%d", SegmentIndexMetaPrefix, collectionInfo.CollectionID, dropIdxID),
-		fmt.Sprintf("%s/%d/%d", IndexMetaPrefix, collectionInfo.CollectionID, dropIdxID),
+		fmt.Sprintf("%s/%d/%d", metastore.SegmentIndexMetaPrefix, collectionInfo.CollectionID, dropIdxID),
+		fmt.Sprintf("%s/%d/%d", metastore.IndexMetaPrefix, collectionInfo.CollectionID, dropIdxID),
 	}
 
 	err = kc.Txn.MultiSaveAndRemoveWithPrefix(saveMeta, delMeta)
@@ -265,7 +267,7 @@ func (kc *KVCatalog) DropIndex(ctx context.Context, collectionInfo *model.Collec
 }
 
 func (kc *KVCatalog) DropCredential(ctx context.Context, username string) error {
-	k := fmt.Sprintf("%s/%s", CredentialPrefix, username)
+	k := fmt.Sprintf("%s/%s", metastore.CredentialPrefix, username)
 
 	err := kc.Txn.Remove(k)
 	if err != nil {
@@ -277,7 +279,7 @@ func (kc *KVCatalog) DropCredential(ctx context.Context, username string) error 
 
 func (kc *KVCatalog) DropAlias(ctx context.Context, collectionID typeutil.UniqueID, alias string, ts typeutil.Timestamp) error {
 	delMetakeys := []string{
-		fmt.Sprintf("%s/%s", CollectionAliasMetaPrefix, alias),
+		fmt.Sprintf("%s/%s", metastore.CollectionAliasMetaPrefix, alias),
 	}
 
 	meta := make(map[string]string)
@@ -291,7 +293,7 @@ func (kc *KVCatalog) DropAlias(ctx context.Context, collectionID typeutil.Unique
 }
 
 func (kc *KVCatalog) GetCollectionByName(ctx context.Context, collectionName string, ts typeutil.Timestamp) (*model.Collection, error) {
-	_, vals, err := kc.Snapshot.LoadWithPrefix(CollectionMetaPrefix, ts)
+	_, vals, err := kc.Snapshot.LoadWithPrefix(metastore.CollectionMetaPrefix, ts)
 	if err != nil {
 		log.Warn("failed to load table from meta Snapshot", zap.Error(err))
 		return nil, err
@@ -304,14 +306,14 @@ func (kc *KVCatalog) GetCollectionByName(ctx context.Context, collectionName str
 			continue
 		}
 		if colMeta.Schema.Name == collectionName {
-			return model.ConvertCollectionPBToModel(&colMeta, map[string]string{}), nil
+			return ConvertCollectionPBToModel(&colMeta, map[string]string{}), nil
 		}
 	}
 	return nil, fmt.Errorf("can't find collection: %s, at timestamp = %d", collectionName, ts)
 }
 
 func (kc *KVCatalog) ListCollections(ctx context.Context, ts typeutil.Timestamp) (map[string]*model.Collection, error) {
-	_, vals, err := kc.Snapshot.LoadWithPrefix(CollectionMetaPrefix, ts)
+	_, vals, err := kc.Snapshot.LoadWithPrefix(metastore.CollectionMetaPrefix, ts)
 	if err != nil {
 		log.Error("load with prefix error", zap.Uint64("timestamp", ts), zap.Error(err))
 		return nil, nil
@@ -324,13 +326,13 @@ func (kc *KVCatalog) ListCollections(ctx context.Context, ts typeutil.Timestamp)
 			log.Warn("unmarshal collection info failed", zap.Error(err))
 			continue
 		}
-		colls[collMeta.Schema.Name] = model.ConvertCollectionPBToModel(&collMeta, map[string]string{})
+		colls[collMeta.Schema.Name] = ConvertCollectionPBToModel(&collMeta, map[string]string{})
 	}
 	return colls, nil
 }
 
 func (kc *KVCatalog) ListAliases(ctx context.Context) ([]*model.Collection, error) {
-	_, values, err := kc.Snapshot.LoadWithPrefix(CollectionAliasMetaPrefix, 0)
+	_, values, err := kc.Snapshot.LoadWithPrefix(metastore.CollectionAliasMetaPrefix, 0)
 	if err != nil {
 		log.Error("load with prefix error", zap.Error(err))
 		return nil, err
@@ -343,13 +345,13 @@ func (kc *KVCatalog) ListAliases(ctx context.Context) ([]*model.Collection, erro
 			log.Warn("unmarshal collection info failed", zap.Error(err))
 			continue
 		}
-		colls = append(colls, model.ConvertCollectionPBToModel(&aliasInfo, map[string]string{}))
+		colls = append(colls, ConvertCollectionPBToModel(&aliasInfo, map[string]string{}))
 	}
 	return colls, nil
 }
 
 func (kc *KVCatalog) ListSegmentIndexes(ctx context.Context) ([]*model.Index, error) {
-	_, values, err := kc.Txn.LoadWithPrefix(SegmentIndexMetaPrefix)
+	_, values, err := kc.Txn.LoadWithPrefix(metastore.SegmentIndexMetaPrefix)
 	if err != nil {
 		log.Error("load with prefix error", zap.Error(err))
 		return nil, err
@@ -366,13 +368,13 @@ func (kc *KVCatalog) ListSegmentIndexes(ctx context.Context) ([]*model.Index, er
 			log.Warn("unmarshal segment index info failed", zap.Error(err))
 			continue
 		}
-		indexes = append(indexes, model.ConvertSegmentIndexPBToModel(&segmentIndexInfo))
+		indexes = append(indexes, ConvertSegmentIndexPBToModel(&segmentIndexInfo))
 	}
 	return indexes, nil
 }
 
 func (kc *KVCatalog) ListIndexes(ctx context.Context) ([]*model.Index, error) {
-	_, values, err := kc.Txn.LoadWithPrefix(IndexMetaPrefix)
+	_, values, err := kc.Txn.LoadWithPrefix(metastore.IndexMetaPrefix)
 	if err != nil {
 		log.Error("load with prefix error", zap.Error(err))
 		return nil, err
@@ -389,13 +391,13 @@ func (kc *KVCatalog) ListIndexes(ctx context.Context) ([]*model.Index, error) {
 			log.Warn("unmarshal index info failed", zap.Error(err))
 			continue
 		}
-		indexes = append(indexes, model.ConvertIndexPBToModel(&meta))
+		indexes = append(indexes, ConvertIndexPBToModel(&meta))
 	}
 	return indexes, nil
 }
 
 func (kc *KVCatalog) ListCredentials(ctx context.Context) ([]string, error) {
-	keys, _, err := kc.Txn.LoadWithPrefix(CredentialPrefix)
+	keys, _, err := kc.Txn.LoadWithPrefix(metastore.CredentialPrefix)
 	if err != nil {
 		log.Error("MetaTable list all credential usernames fail", zap.Error(err))
 		return nil, err
@@ -403,7 +405,7 @@ func (kc *KVCatalog) ListCredentials(ctx context.Context) ([]string, error) {
 
 	var usernames []string
 	for _, path := range keys {
-		username := typeutil.After(path, UserSubPrefix+"/")
+		username := typeutil.After(path, metastore.UserSubPrefix+"/")
 		if len(username) == 0 {
 			log.Warn("no username extract from path:", zap.String("path", path))
 			continue

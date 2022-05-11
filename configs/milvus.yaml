@@ -38,6 +38,16 @@ etcd:
     # please adjust in embedded Milvus: /tmp/milvus/etcdData/
     dir: default.etcd
 
+db:
+  username: root
+  password: 11111111
+  address: localhost
+  port: 3306
+  dbName: milvus_meta
+  driverName: mysql
+  maxOpenConns: 20
+  maxIdleConns: 5
+
 # please adjust in embedded Milvus: /tmp/milvus/data/
 localStorage:
   path: /var/lib/milvus/data/
@@ -281,6 +291,8 @@ common:
 
   # please adjust in embedded Milvus: local
   storageType: minio
+  meta:
+    storageType: etcd
 
   security:
     authorizationEnabled: false

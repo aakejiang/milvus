@@ -27,6 +27,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/milvus-io/milvus/internal/metastore"
+
 	"github.com/golang/protobuf/proto"
 	"github.com/milvus-io/milvus/internal/common"
 	"github.com/milvus-io/milvus/internal/kv"
@@ -431,7 +433,7 @@ func createCollectionInMeta(dbName, collName string, core *Core, shardsNum int32
 		Name:                 schema.Name,
 		Description:          schema.Description,
 		AutoID:               schema.AutoID,
-		Fields:               model.BatchConvertFieldPBToModel(schema.Fields),
+		Fields:               kvmetestore.BatchConvertFieldPBToModel(schema.Fields),
 		FieldIndexes:         make([]*model.Index, 0, 16),
 		VirtualChannelNames:  vchanNames,
 		PhysicalChannelNames: chanNames,
@@ -478,7 +480,7 @@ func createCollectionInMeta(dbName, collName string, core *Core, shardsNum int32
 	// build DdOperation and save it into etcd, when ddmsg send fail,
 	// system can restore ddmsg from etcd and re-send
 	ddCollReq.Base.Timestamp = ts
-	ddOpStr, err := EncodeDdOperation(&ddCollReq, CreateCollectionDDType)
+	ddOpStr, err := metastore.EncodeDdOperation(&ddCollReq, CreateCollectionDDType)
 	if err != nil {
 		return fmt.Errorf("encodeDdOperation fail, error = %w", err)
 	}
@@ -670,7 +672,7 @@ func TestRootCoordInitData(t *testing.T) {
 	err = core.MetaTable.DeleteCredential(util.UserRoot)
 	assert.NoError(t, err)
 
-	snapshotKV, err := kvmetestore.NewMetaSnapshot(etcdCli, Params.EtcdCfg.MetaRootPath, TimestampPrefix, 7)
+	snapshotKV, err := kvmetestore.NewMetaSnapshot(etcdCli, Params.EtcdCfg.MetaRootPath, metastore.TimestampPrefix, 7)
 	assert.NotNil(t, snapshotKV)
 	assert.NoError(t, err)
 	txnKV := etcdkv.NewEtcdKV(etcdCli, Params.EtcdCfg.MetaRootPath)
@@ -889,13 +891,13 @@ func TestRootCoord_Base(t *testing.T) {
 		core.chanTimeTick.lock.Unlock()
 
 		// check DD operation info
-		flag, err := core.MetaTable.txn.Load(DDMsgSendPrefix)
+		flag, err := core.MetaTable.txn.Load(metastore.DDMsgSendPrefix)
 		assert.NoError(t, err)
 		assert.Equal(t, "true", flag)
-		ddOpStr, err := core.MetaTable.txn.Load(DDOperationPrefix)
+		ddOpStr, err := core.MetaTable.txn.Load(metastore.DDOperationPrefix)
 		assert.NoError(t, err)
-		var ddOp DdOperation
-		err = DecodeDdOperation(ddOpStr, &ddOp)
+		var ddOp metastore.DdOperation
+		err = metastore.DecodeDdOperation(ddOpStr, &ddOp)
 		assert.NoError(t, err)
 		assert.Equal(t, CreateCollectionDDType, ddOp.Type)
 
@@ -1067,13 +1069,13 @@ func TestRootCoord_Base(t *testing.T) {
 		assert.Equal(t, collName, pnm.GetCollArray()[0])
 
 		// check DD operation info
-		flag, err := core.MetaTable.txn.Load(DDMsgSendPrefix)
+		flag, err := core.MetaTable.txn.Load(metastore.DDMsgSendPrefix)
 		assert.NoError(t, err)
 		assert.Equal(t, "true", flag)
-		ddOpStr, err := core.MetaTable.txn.Load(DDOperationPrefix)
+		ddOpStr, err := core.MetaTable.txn.Load(metastore.DDOperationPrefix)
 		assert.NoError(t, err)
-		var ddOp DdOperation
-		err = DecodeDdOperation(ddOpStr, &ddOp)
+		var ddOp metastore.DdOperation
+		err = metastore.DecodeDdOperation(ddOpStr, &ddOp)
 		assert.NoError(t, err)
 		assert.Equal(t, CreatePartitionDDType, ddOp.Type)
 
@@ -1646,13 +1648,13 @@ func TestRootCoord_Base(t *testing.T) {
 		assert.Equal(t, collName, pnm.GetCollArray()[1])
 
 		// check DD operation info
-		flag, err := core.MetaTable.txn.Load(DDMsgSendPrefix)
+		flag, err := core.MetaTable.txn.Load(metastore.DDMsgSendPrefix)
 		assert.NoError(t, err)
 		assert.Equal(t, "true", flag)
-		ddOpStr, err := core.MetaTable.txn.Load(DDOperationPrefix)
+		ddOpStr, err := core.MetaTable.txn.Load(metastore.DDOperationPrefix)
 		assert.NoError(t, err)
-		var ddOp DdOperation
-		err = DecodeDdOperation(ddOpStr, &ddOp)
+		var ddOp metastore.DdOperation
+		err = metastore.DecodeDdOperation(ddOpStr, &ddOp)
 		assert.NoError(t, err)
 		assert.Equal(t, DropPartitionDDType, ddOp.Type)
 
@@ -1740,13 +1742,13 @@ func TestRootCoord_Base(t *testing.T) {
 		assert.Equal(t, collName, collArray[2])
 
 		// check DD operation info
-		flag, err := core.MetaTable.txn.Load(DDMsgSendPrefix)
+		flag, err := core.MetaTable.txn.Load(metastore.DDMsgSendPrefix)
 		assert.NoError(t, err)
 		assert.Equal(t, "true", flag)
-		ddOpStr, err := core.MetaTable.txn.Load(DDOperationPrefix)
+		ddOpStr, err := core.MetaTable.txn.Load(metastore.DDOperationPrefix)
 		assert.NoError(t, err)
-		var ddOp DdOperation
-		err = DecodeDdOperation(ddOpStr, &ddOp)
+		var ddOp metastore.DdOperation
+		err = metastore.DecodeDdOperation(ddOpStr, &ddOp)
 		assert.NoError(t, err)
 		assert.Equal(t, DropCollectionDDType, ddOp.Type)
 

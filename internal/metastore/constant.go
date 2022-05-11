@@ -1,8 +1,17 @@
-package kv
+package metastore
 
 const (
 	// ComponentPrefix prefix for rootcoord component
 	ComponentPrefix = "root-coord"
+
+	// TimestampPrefix prefix for timestamp
+	TimestampPrefix = ComponentPrefix + "/timestamp"
+
+	// DDOperationPrefix prefix for DD operation
+	DDOperationPrefix = ComponentPrefix + "/dd-operation"
+
+	// DDMsgSendPrefix prefix to indicate whether DD msg has been send
+	DDMsgSendPrefix = ComponentPrefix + "/dd-msg-send"
 
 	// CollectionMetaPrefix prefix for collection meta
 	CollectionMetaPrefix = ComponentPrefix + "/collection"
@@ -22,3 +31,9 @@ const (
 	// CredentialPrefix prefix for credential user
 	CredentialPrefix = ComponentPrefix + UserSubPrefix
 )
+
+// DdOperation used to save ddMsg into etcd
+type DdOperation struct {
+	Body []byte `json:"body"`
+	Type string `json:"type"`
+}

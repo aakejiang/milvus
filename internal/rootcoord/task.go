@@ -21,6 +21,10 @@ import (
 	"fmt"
 	"strconv"
 
+	"github.com/milvus-io/milvus/internal/metastore/kv"
+
+	"github.com/milvus-io/milvus/internal/metastore"
+
 	"github.com/golang/protobuf/proto"
 	"github.com/milvus-io/milvus/internal/common"
 	"github.com/milvus-io/milvus/internal/log"
@@ -161,7 +165,7 @@ func (t *CreateCollectionReqTask) Execute(ctx context.Context) error {
 		Name:                 schema.Name,
 		Description:          schema.Description,
 		AutoID:               schema.AutoID,
-		Fields:               model.BatchConvertFieldPBToModel(schema.Fields),
+		Fields:               kv.BatchConvertFieldPBToModel(schema.Fields),
 		VirtualChannelNames:  vchanNames,
 		PhysicalChannelNames: chanNames,
 		ShardsNum:            t.Req.ShardsNum,
@@ -205,7 +209,7 @@ func (t *CreateCollectionReqTask) Execute(ctx context.Context) error {
 	// build DdOperation and save it into etcd, when ddmsg send fail,
 	// system can restore ddmsg from etcd and re-send
 	ddCollReq.Base.Timestamp = ts
-	ddOpStr, err := EncodeDdOperation(&ddCollReq, CreateCollectionDDType)
+	ddOpStr, err := metastore.EncodeDdOperation(&ddCollReq, CreateCollectionDDType)
 	if err != nil {
 		return fmt.Errorf("encodeDdOperation fail, error = %w", err)
 	}
@@ -263,7 +267,7 @@ func (t *CreateCollectionReqTask) Execute(ctx context.Context) error {
 	}
 
 	// Update DDOperation in etcd
-	return t.core.MetaTable.txn.Save(DDMsgSendPrefix, strconv.FormatBool(true))
+	return t.core.MetaTable.txn.Save(metastore.DDMsgSendPrefix, strconv.FormatBool(true))
 }
 
 // DropCollectionReqTask drop collection request task
@@ -325,7 +329,7 @@ func (t *DropCollectionReqTask) Execute(ctx context.Context) error {
 	// build DdOperation and save it into etcd, when ddmsg send fail,
 	// system can restore ddmsg from etcd and re-send
 	ddReq.Base.Timestamp = ts
-	ddOpStr, err := EncodeDdOperation(&ddReq, DropCollectionDDType)
+	ddOpStr, err := metastore.EncodeDdOperation(&ddReq, DropCollectionDDType)
 	if err != nil {
 		return fmt.Errorf("encodeDdOperation fail, error = %w", err)
 	}
@@ -385,7 +389,7 @@ func (t *DropCollectionReqTask) Execute(ctx context.Context) error {
 	t.core.ExpireMetaCache(ctx, aliases, ts)
 
 	// Update DDOperation in etcd
-	return t.core.MetaTable.txn.Save(DDMsgSendPrefix, strconv.FormatBool(true))
+	return t.core.MetaTable.txn.Save(metastore.DDMsgSendPrefix, strconv.FormatBool(true))
 }
 
 // HasCollectionReqTask has collection request task
@@ -450,7 +454,7 @@ func (t *DescribeCollectionReqTask) Execute(ctx context.Context) error {
 		Name:        collInfo.Name,
 		Description: collInfo.Description,
 		AutoID:      collInfo.AutoID,
-		Fields:      model.BatchConvertToFieldSchemaPB(collInfo.Fields),
+		Fields:      kv.BatchConvertToFieldSchemaPB(collInfo.Fields),
 	}
 	t.Rsp.CollectionID = collInfo.CollectionID
 	t.Rsp.VirtualChannelNames = collInfo.VirtualChannelNames
@@ -545,7 +549,7 @@ func (t *CreatePartitionReqTask) Execute(ctx context.Context) error {
 	// build DdOperation and save it into etcd, when ddmsg send fail,
 	// system can restore ddmsg from etcd and re-send
 	ddReq.Base.Timestamp = ts
-	ddOpStr, err := EncodeDdOperation(&ddReq, CreatePartitionDDType)
+	ddOpStr, err := metastore.EncodeDdOperation(&ddReq, CreatePartitionDDType)
 	if err != nil {
 		return fmt.Errorf("encodeDdOperation fail, error = %w", err)
 	}
@@ -585,7 +589,7 @@ func (t *CreatePartitionReqTask) Execute(ctx context.Context) error {
 	t.core.ExpireMetaCache(ctx, []string{t.Req.CollectionName}, ts)
 
 	// Update DDOperation in etcd
-	return t.core.MetaTable.txn.Save(DDMsgSendPrefix, strconv.FormatBool(true))
+	return t.core.MetaTable.txn.Save(metastore.DDMsgSendPrefix, strconv.FormatBool(true))
 }
 
 // DropPartitionReqTask drop partition request task
@@ -632,7 +636,7 @@ func (t *DropPartitionReqTask) Execute(ctx context.Context) error {
 	// build DdOperation and save it into etcd, when ddmsg send fail,
 	// system can restore ddmsg from etcd and re-send
 	ddReq.Base.Timestamp = ts
-	ddOpStr, err := EncodeDdOperation(&ddReq, DropPartitionDDType)
+	ddOpStr, err := metastore.EncodeDdOperation(&ddReq, DropPartitionDDType)
 	if err != nil {
 		return fmt.Errorf("encodeDdOperation fail, error = %w", err)
 	}
@@ -679,7 +683,7 @@ func (t *DropPartitionReqTask) Execute(ctx context.Context) error {
 	//}
 
 	// Update DDOperation in etcd
-	return t.core.MetaTable.txn.Save(DDMsgSendPrefix, strconv.FormatBool(true))
+	return t.core.MetaTable.txn.Save(metastore.DDMsgSendPrefix, strconv.FormatBool(true))
 }
 
 // HasPartitionReqTask has partition request task
@@ -916,7 +920,7 @@ func (t *DescribeSegmentsReqTask) Execute(ctx context.Context) error {
 					zap.Int64("segment", segID))
 				return err
 			}
-			t.Rsp.SegmentInfos[segID].ExtraIndexInfos[indexID] = model.ConvertToIndexPB(extraIndexInfo)
+			t.Rsp.SegmentInfos[segID].ExtraIndexInfos[indexID] = kv.ConvertToIndexPB(extraIndexInfo)
 		}
 	}
 
@@ -1029,7 +1033,7 @@ func (t *DescribeIndexReqTask) Execute(ctx context.Context) error {
 		return err
 	}
 	for _, i := range idx {
-		f, err := GetFieldSchemaByIndexID(&coll, typeutil.UniqueID(i.IndexID))
+		f, err := metastore.GetFieldSchemaByIndexID(&coll, typeutil.UniqueID(i.IndexID))
 		if err != nil {
 			log.Warn("Get field schema by index id failed", zap.String("collection name", t.Req.CollectionName), zap.String("index name", t.Req.IndexName), zap.Error(err))
 			continue

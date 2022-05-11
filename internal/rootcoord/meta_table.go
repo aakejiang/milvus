@@ -24,30 +24,24 @@ import (
 	"sync"
 
 	"github.com/golang/protobuf/proto"
+	"github.com/milvus-io/milvus/internal/db"
 	"github.com/milvus-io/milvus/internal/kv"
 	"github.com/milvus-io/milvus/internal/log"
 	"github.com/milvus-io/milvus/internal/metastore"
 	kvmetestore "github.com/milvus-io/milvus/internal/metastore/kv"
 	"github.com/milvus-io/milvus/internal/metastore/model"
+	"github.com/milvus-io/milvus/internal/metastore/table"
 	"github.com/milvus-io/milvus/internal/proto/commonpb"
 	pb "github.com/milvus-io/milvus/internal/proto/etcdpb"
 	"github.com/milvus-io/milvus/internal/proto/internalpb"
 	"github.com/milvus-io/milvus/internal/proto/milvuspb"
 	"github.com/milvus-io/milvus/internal/proto/schemapb"
+	"github.com/milvus-io/milvus/internal/util/paramtable"
 	"github.com/milvus-io/milvus/internal/util/typeutil"
 	"go.uber.org/zap"
 )
 
 const (
-	// TimestampPrefix prefix for timestamp
-	TimestampPrefix = kvmetestore.ComponentPrefix + "/timestamp"
-
-	// DDOperationPrefix prefix for DD operation
-	DDOperationPrefix = kvmetestore.ComponentPrefix + "/dd-operation"
-
-	// DDMsgSendPrefix prefix to indicate whether DD msg has been send
-	DDMsgSendPrefix = kvmetestore.ComponentPrefix + "/dd-msg-send"
-
 	// CreateCollectionDDType name of DD type for create collection
 	CreateCollectionDDType = "CreateCollection"
 
@@ -87,19 +81,39 @@ type MetaTable struct {
 	credLock  sync.RWMutex
 }
 
+// TODO using factory once dependency of tnx and snap are removed
+func newCatalog(txn kv.TxnKV, snap kv.SnapShotKV) (metastore.Catalog, error) {
+	var catalog metastore.Catalog
+	if Params.CommonCfg.MetaStorageType == paramtable.DefaultMetaStore {
+		catalog = &kvmetestore.KVCatalog{Txn: txn, Snapshot: snap}
+	} else {
+		conn, err := db.Open(&Params.DBCfg)
+		if err != nil {
+			log.Error("fail connecting to db", zap.Any("error", err))
+			return nil, err
+		}
+		catalog = &table.TableCatalog{DB: conn}
+	}
+	return catalog, nil
+}
+
 // NewMetaTable creates meta table for rootcoord, which stores all in-memory information
 // for collection, partition, segment, index etc.
 func NewMetaTable(ctx context.Context, txn kv.TxnKV, snap kv.SnapShotKV) (*MetaTable, error) {
+	catalog, err := newCatalog(txn, snap)
+	if err != nil {
+		return nil, err
+	}
 	mt := &MetaTable{
 		ctx:       ctx,
 		txn:       txn,
 		snapshot:  snap,
-		catalog:   &kvmetestore.KVCatalog{Txn: txn, Snapshot: snap},
+		catalog:   catalog,
 		proxyLock: sync.RWMutex{},
 		ddLock:    sync.RWMutex{},
 		credLock:  sync.RWMutex{},
 	}
-	err := mt.reloadFromKV()
+	err = mt.reloadFromKV()
 	if err != nil {
 		return nil, err
 	}
@@ -188,8 +202,8 @@ func (mt *MetaTable) AddCollection(coll *model.Collection, ts typeutil.Timestamp
 	mt.collName2ID[coll.Name] = coll.CollectionID
 
 	meta := map[string]string{}
-	meta[DDMsgSendPrefix] = "false"
-	meta[DDOperationPrefix] = ddOpStr
+	meta[metastore.DDMsgSendPrefix] = "false"
+	meta[metastore.DDOperationPrefix] = ddOpStr
 	coll.Extra = meta
 	return mt.catalog.CreateCollection(mt.ctx, coll, ts)
 }
@@ -237,8 +251,8 @@ func (mt *MetaTable) DeleteCollection(collID typeutil.UniqueID, ts typeutil.Time
 
 	// save ddOpStr into etcd
 	var meta = map[string]string{
-		DDMsgSendPrefix:   "false",
-		DDOperationPrefix: ddOpStr,
+		metastore.DDMsgSendPrefix:   "false",
+		metastore.DDOperationPrefix: ddOpStr,
 	}
 
 	collection := &model.Collection{
@@ -285,7 +299,7 @@ func (mt *MetaTable) GetCollectionByID(collectionID typeutil.UniqueID, ts typeut
 		if !ok {
 			return nil, fmt.Errorf("can't find collection id : %d", collectionID)
 		}
-		return model.CloneCollectionModel(col), nil
+		return kvmetestore.CloneCollectionModel(col), nil
 	}
 
 	return mt.catalog.GetCollectionByID(mt.ctx, collectionID, ts)
@@ -308,7 +322,7 @@ func (mt *MetaTable) GetCollectionByName(collectionName string, ts typeutil.Time
 			return nil, fmt.Errorf("can't find collection %s with id %d", collectionName, vid)
 		}
 
-		return model.CloneCollectionModel(col), nil
+		return kvmetestore.CloneCollectionModel(col), nil
 	}
 
 	return mt.catalog.GetCollectionByName(mt.ctx, collectionName, ts)
@@ -323,7 +337,7 @@ func (mt *MetaTable) ListCollections(ts typeutil.Timestamp) (map[string]*model.C
 	if ts == 0 {
 		for collName, collID := range mt.collName2ID {
 			col := mt.collID2Meta[collID]
-			cols[collName] = model.CloneCollectionModel(col)
+			cols[collName] = kvmetestore.CloneCollectionModel(col)
 		}
 		return cols, nil
 	}
@@ -402,8 +416,8 @@ func (mt *MetaTable) AddPartition(collID typeutil.UniqueID, partitionName string
 
 	metaTxn := map[string]string{}
 	// save ddOpStr into etcd
-	metaTxn[DDMsgSendPrefix] = "false"
-	metaTxn[DDOperationPrefix] = ddOpStr
+	metaTxn[metastore.DDMsgSendPrefix] = "false"
+	metaTxn[metastore.DDOperationPrefix] = ddOpStr
 	coll.Extra = metaTxn
 	return mt.catalog.CreatePartition(mt.ctx, &coll, ts)
 }
@@ -522,8 +536,8 @@ func (mt *MetaTable) DeletePartition(collID typeutil.UniqueID, partitionName str
 
 	metaTxn := make(map[string]string)
 	// save ddOpStr into etcd
-	metaTxn[DDMsgSendPrefix] = "false"
-	metaTxn[DDOperationPrefix] = ddOpStr
+	metaTxn[metastore.DDMsgSendPrefix] = "false"
+	metaTxn[metastore.DDOperationPrefix] = ddOpStr
 	col.Extra = metaTxn
 
 	err := mt.catalog.DropPartition(mt.ctx, &col, partID, ts)
@@ -567,7 +581,7 @@ func (mt *MetaTable) AddIndex(segIdxInfo *model.Index) error {
 	} else {
 		tmpInfo, ok := segIdxMap[segIdxInfo.IndexID]
 		if ok {
-			if SegmentIndexInfoEqual(segIdxInfo, &tmpInfo) {
+			if metastore.SegmentIndexInfoEqual(segIdxInfo, &tmpInfo) {
 				if segIdxInfo.BuildID == tmpInfo.BuildID {
 					log.Debug("Identical SegmentIndexInfo already exist", zap.Int64("IndexID", segIdxInfo.IndexID))
 					return nil
@@ -770,7 +784,7 @@ func (mt *MetaTable) unlockIsSegmentIndexed(segID typeutil.UniqueID, fieldSchema
 		if !ok {
 			continue
 		}
-		if EqualKeyPairArray(indexParams, idxMeta.IndexParams) {
+		if metastore.EqualKeyPairArray(indexParams, idxMeta.IndexParams) {
 			exist = true
 			break
 		}
@@ -823,7 +837,7 @@ func (mt *MetaTable) checkFieldIndexDuplicate(collMeta model.Collection, fieldSc
 		if info, ok := mt.indexID2Meta[f.IndexID]; ok {
 			if info.IndexName == idxInfo.IndexName {
 				// the index name must be different for different indexes
-				if f.FieldID != fieldSchema.FieldID || !EqualKeyPairArray(info.IndexParams, idxInfo.IndexParams) {
+				if f.FieldID != fieldSchema.FieldID || !metastore.EqualKeyPairArray(info.IndexParams, idxInfo.IndexParams) {
 					return false, fmt.Errorf("index already exists, collection: %s, field: %s, index: %s", collMeta.Name, fieldSchema.Name, idxInfo.IndexName)
 				}
 
@@ -883,17 +897,17 @@ func (mt *MetaTable) GetNotIndexedSegments(collName string, fieldName string, id
 			IndexID: idxInfo.IndexID,
 		}
 		collMeta.FieldIndexes = append(collMeta.FieldIndexes, idx)
-		k1 := path.Join(kvmetestore.CollectionMetaPrefix, strconv.FormatInt(collMeta.CollectionID, 10))
-		v1, err := proto.Marshal(model.ConvertToCollectionPB(&collMeta))
+		k1 := path.Join(metastore.CollectionMetaPrefix, strconv.FormatInt(collMeta.CollectionID, 10))
+		v1, err := proto.Marshal(kvmetestore.ConvertToCollectionPB(&collMeta))
 		if err != nil {
 			log.Error("MetaTable GetNotIndexedSegments Marshal collMeta fail",
 				zap.String("key", k1), zap.Error(err))
 			return nil, model.Field{}, fmt.Errorf("metaTable GetNotIndexedSegments Marshal collMeta fail key:%s, err:%w", k1, err)
 		}
 
-		k2 := fmt.Sprintf("%s/%d/%d", kvmetestore.IndexMetaPrefix, collMeta.CollectionID, idx.IndexID)
+		k2 := fmt.Sprintf("%s/%d/%d", metastore.IndexMetaPrefix, collMeta.CollectionID, idx.IndexID)
 		//k2 := path.Join(IndexMetaPrefix, strconv.FormatInt(idx.IndexID, 10))
-		v2, err := proto.Marshal(model.ConvertToIndexPB(idxInfo))
+		v2, err := proto.Marshal(kvmetestore.ConvertToIndexPB(idxInfo))
 		if err != nil {
 			log.Error("MetaTable GetNotIndexedSegments Marshal idxInfo fail",
 				zap.String("key", k2), zap.Error(err))
@@ -1071,7 +1085,7 @@ func (mt *MetaTable) AddCredential(credInfo *internalpb.CredentialInfo) error {
 // GetCredential get credential by username
 func (mt *MetaTable) getCredential(username string) (*internalpb.CredentialInfo, error) {
 	credential, err := mt.catalog.GetCredential(mt.ctx, username)
-	return model.ConvertToCredentialPB(credential), err
+	return kvmetestore.ConvertToCredentialPB(credential), err
 }
 
 // DeleteCredential delete credential

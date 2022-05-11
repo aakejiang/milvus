@@ -19,6 +19,8 @@ package rootcoord
 import (
 	"testing"
 
+	"github.com/milvus-io/milvus/internal/metastore"
+
 	"github.com/milvus-io/milvus/internal/metastore/model"
 
 	"github.com/milvus-io/milvus/internal/mq/msgstream"
@@ -35,20 +37,20 @@ func Test_EqualKeyPairArray(t *testing.T) {
 	}
 
 	p2 := []*commonpb.KeyValuePair{}
-	assert.False(t, EqualKeyPairArray(p1, p2))
+	assert.False(t, metastore.EqualKeyPairArray(p1, p2))
 
 	p2 = append(p2, &commonpb.KeyValuePair{
 		Key:   "k2",
 		Value: "v2",
 	})
-	assert.False(t, EqualKeyPairArray(p1, p2))
+	assert.False(t, metastore.EqualKeyPairArray(p1, p2))
 	p2 = []*commonpb.KeyValuePair{
 		{
 			Key:   "k1",
 			Value: "v2",
 		},
 	}
-	assert.False(t, EqualKeyPairArray(p1, p2))
+	assert.False(t, metastore.EqualKeyPairArray(p1, p2))
 
 	p2 = []*commonpb.KeyValuePair{
 		{
@@ -56,7 +58,7 @@ func Test_EqualKeyPairArray(t *testing.T) {
 			Value: "v1",
 		},
 	}
-	assert.True(t, EqualKeyPairArray(p1, p2))
+	assert.True(t, metastore.EqualKeyPairArray(p1, p2))
 }
 
 func Test_GetFieldSchemaByID(t *testing.T) {
@@ -67,9 +69,9 @@ func Test_GetFieldSchemaByID(t *testing.T) {
 			},
 		},
 	}
-	_, err := GetFieldSchemaByID(coll, 1)
+	_, err := metastore.GetFieldSchemaByID(coll, 1)
 	assert.Nil(t, err)
-	_, err = GetFieldSchemaByID(coll, 2)
+	_, err = metastore.GetFieldSchemaByID(coll, 2)
 	assert.NotNil(t, err)
 }
 
@@ -87,9 +89,9 @@ func Test_GetFieldSchemaByIndexID(t *testing.T) {
 			},
 		},
 	}
-	_, err := GetFieldSchemaByIndexID(coll, 2)
+	_, err := metastore.GetFieldSchemaByIndexID(coll, 2)
 	assert.Nil(t, err)
-	_, err = GetFieldSchemaByIndexID(coll, 3)
+	_, err = metastore.GetFieldSchemaByIndexID(coll, 3)
 	assert.NotNil(t, err)
 }
 
@@ -99,12 +101,12 @@ func Test_EncodeMsgPositions(t *testing.T) {
 		MsgID:       []byte{1, 2, 3},
 	}
 
-	str, err := EncodeMsgPositions([]*msgstream.MsgPosition{})
+	str, err := metastore.EncodeMsgPositions([]*msgstream.MsgPosition{})
 	assert.Empty(t, str)
 	assert.Nil(t, err)
 
 	mps := []*msgstream.MsgPosition{mp}
-	str, err = EncodeMsgPositions(mps)
+	str, err = metastore.EncodeMsgPositions(mps)
 	assert.NotEmpty(t, str)
 	assert.Nil(t, err)
 }
@@ -115,16 +117,16 @@ func Test_DecodeMsgPositions(t *testing.T) {
 		MsgID:       []byte{1, 2, 3},
 	}
 
-	str, err := EncodeMsgPositions([]*msgstream.MsgPosition{mp})
+	str, err := metastore.EncodeMsgPositions([]*msgstream.MsgPosition{mp})
 	assert.Nil(t, err)
 
 	mpOut := make([]*msgstream.MsgPosition, 1)
-	err = DecodeMsgPositions(str, &mpOut)
+	err = metastore.DecodeMsgPositions(str, &mpOut)
 	assert.Nil(t, err)
 
-	err = DecodeMsgPositions("", &mpOut)
+	err = metastore.DecodeMsgPositions("", &mpOut)
 	assert.Nil(t, err)
 
-	err = DecodeMsgPositions("null", &mpOut)
+	err = metastore.DecodeMsgPositions("null", &mpOut)
 	assert.Nil(t, err)
 }

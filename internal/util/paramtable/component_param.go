@@ -32,6 +32,8 @@ const (
 
 	// DefaultIndexSliceSize defines the default slice size of index file when serializing.
 	DefaultIndexSliceSize = 4
+
+	DefaultMetaStore = "etcd"
 )
 
 // ComponentParam is used to quickly and easily access all components' configurations.
@@ -124,9 +126,10 @@ type commonConfig struct {
 	RetentionDuration    int64
 	EntityExpirationTTL  time.Duration
 
-	SimdType       string
-	IndexSliceSize int64
-	StorageType    string
+	SimdType        string
+	IndexSliceSize  int64
+	StorageType     string
+	MetaStorageType string
 
 	AuthorizationEnabled bool
 }
@@ -164,6 +167,7 @@ func (p *commonConfig) init(base *BaseTable) {
 	p.initSimdType()
 	p.initIndexSliceSize()
 	p.initStorageType()
+	p.initMetaStorageType()
 
 	p.initEnableAuthorization()
 }
@@ -367,6 +371,10 @@ func (p *commonConfig) initIndexSliceSize() {
 
 func (p *commonConfig) initStorageType() {
 	p.StorageType = p.Base.LoadWithDefault("common.storageType", "minio")
+}
+
+func (p *commonConfig) initMetaStorageType() {
+	p.MetaStorageType = p.Base.LoadWithDefault("common.meta.storageType", DefaultMetaStore)
 }
 
 func (p *commonConfig) initEnableAuthorization() {

@@ -30,6 +30,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/milvus-io/milvus/internal/metastore"
+
 	"github.com/golang/protobuf/proto"
 	"github.com/milvus-io/milvus/internal/allocator"
 	"github.com/milvus-io/milvus/internal/common"
@@ -69,12 +71,6 @@ import (
 type UniqueID = typeutil.UniqueID
 
 // ------------------ struct -----------------------
-
-// DdOperation used to save ddMsg into etcd
-type DdOperation struct {
-	Body []byte `json:"body"`
-	Type string `json:"type"`
-}
 
 func metricProxy(v int64) string {
 	return fmt.Sprintf("client_%d", v)
@@ -389,7 +385,7 @@ func (c *Core) checkFlushedSegments(ctx context.Context) {
 				}
 				for _, idxInfo := range indexInfos {
 					/* #nosec G601 */
-					field, err := GetFieldSchemaByID(&collMeta, idxInfo.FieldID)
+					field, err := metastore.GetFieldSchemaByID(&collMeta, idxInfo.FieldID)
 					if err != nil {
 						log.Debug("GetFieldSchemaByID",
 							zap.Any("collection_meta", collMeta),
@@ -769,7 +765,7 @@ func (c *Core) SetIndexCoord(s types.IndexCoord) error {
 			IndexID:     idxInfo.IndexID,
 			IndexName:   idxInfo.IndexName,
 			NumRows:     numRows,
-			FieldSchema: model.ConvertToFieldSchemaPB(field),
+			FieldSchema: kvmetestore.ConvertToFieldSchemaPB(field),
 		})
 		if err != nil {
 			return retID, err
@@ -1153,7 +1149,7 @@ func (c *Core) initData() error {
 
 func (c *Core) reSendDdMsg(ctx context.Context, force bool) error {
 	if !force {
-		flag, err := c.MetaTable.txn.Load(DDMsgSendPrefix)
+		flag, err := c.MetaTable.txn.Load(metastore.DDMsgSendPrefix)
 		if err != nil {
 			// TODO, this is super ugly hack but our kv interface does not support loadWithExist
 			// leave it for later
@@ -1173,12 +1169,12 @@ func (c *Core) reSendDdMsg(ctx context.Context, force bool) error {
 		}
 	}
 
-	ddOpStr, err := c.MetaTable.txn.Load(DDOperationPrefix)
+	ddOpStr, err := c.MetaTable.txn.Load(metastore.DDOperationPrefix)
 	if err != nil {
 		log.Debug("DdOperation key does not exist")
 		return nil
 	}
-	var ddOp DdOperation
+	var ddOp metastore.DdOperation
 	if err = json.Unmarshal([]byte(ddOpStr), &ddOp); err != nil {
 		return err
 	}
@@ -1268,7 +1264,7 @@ func (c *Core) reSendDdMsg(ctx context.Context, force bool) error {
 	}
 
 	// Update DDOperation in etcd
-	return c.MetaTable.txn.Save(DDMsgSendPrefix, strconv.FormatBool(true))
+	return c.MetaTable.txn.Save(metastore.DDMsgSendPrefix, strconv.FormatBool(true))
 }
 
 // Start starts RootCoord.
@@ -2069,7 +2065,7 @@ func (c *Core) SegmentFlushCompleted(ctx context.Context, in *datapb.SegmentFlus
 	}
 
 	for _, f := range coll.FieldIndexes {
-		fieldSch, err := GetFieldSchemaByID(coll, f.FieldID)
+		fieldSch, err := metastore.GetFieldSchemaByID(coll, f.FieldID)
 		if err != nil {
 			log.Warn("field schema not found", zap.String("role", typeutil.RootCoordRole),
 				zap.String("collection_name", coll.Name), zap.Int64("field id", f.FieldID),

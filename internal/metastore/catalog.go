@@ -13,6 +13,7 @@ type Catalog interface {
 	GetCollectionByName(ctx context.Context, collectionName string, ts typeutil.Timestamp) (*model.Collection, error)
 	ListCollections(ctx context.Context, ts typeutil.Timestamp) (map[string]*model.Collection, error)
 	CollectionExists(ctx context.Context, collectionID typeutil.UniqueID, ts typeutil.Timestamp) bool
+	// TODO replace ddOpStr with ddOp
 	DropCollection(ctx context.Context, collectionInfo *model.Collection, ts typeutil.Timestamp) error
 
 	CreatePartition(ctx context.Context, coll *model.Collection, ts typeutil.Timestamp) error

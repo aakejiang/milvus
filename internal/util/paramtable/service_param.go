@@ -38,6 +38,7 @@ type ServiceParam struct {
 
 	LocalStorageCfg LocalStorageConfig
 	EtcdCfg         EtcdConfig
+	DBCfg           DBConfig
 	PulsarCfg       PulsarConfig
 	KafkaCfg        KafkaConfig
 	RocksmqCfg      RocksmqConfig
@@ -49,6 +50,7 @@ func (p *ServiceParam) Init() {
 
 	p.LocalStorageCfg.init(&p.BaseTable)
 	p.EtcdCfg.init(&p.BaseTable)
+	p.DBCfg.init(&p.BaseTable)
 	p.PulsarCfg.init(&p.BaseTable)
 	p.KafkaCfg.init(&p.BaseTable)
 	p.RocksmqCfg.init(&p.BaseTable)
@@ -162,6 +164,92 @@ func (p *LocalStorageConfig) init(base *BaseTable) {
 
 func (p *LocalStorageConfig) initPath() {
 	p.Path = p.Base.LoadWithDefault("localStorage.path", "/var/lib/milvus/data")
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// --- mysql ---
+type DBConfig struct {
+	Base *BaseTable
+
+	Username     string
+	Password     string
+	Address      string
+	Port         int
+	DBName       string
+	DriverName   string
+	MaxOpenConns int
+	MaxIdleConns int
+}
+
+func (p *DBConfig) init(base *BaseTable) {
+	p.Base = base
+	p.LoadCfgToMemory()
+}
+
+func (p *DBConfig) LoadCfgToMemory() {
+	p.initUsername()
+	p.initPassword()
+	p.initAddress()
+	p.initPort()
+	p.initDbName()
+	p.initDriverName()
+	p.initMaxOpenConns()
+	p.initMaxIdleConns()
+}
+
+func (p *DBConfig) initUsername() {
+	username, err := p.Base.Load("db.username")
+	if err != nil {
+		panic(err)
+	}
+	p.Username = username
+}
+
+func (p *DBConfig) initPassword() {
+	password, err := p.Base.Load("db.password")
+	if err != nil {
+		panic(err)
+	}
+	p.Password = password
+}
+
+func (p *DBConfig) initAddress() {
+	address, err := p.Base.Load("db.address")
+	if err != nil {
+		panic(err)
+	}
+	p.Address = address
+}
+
+func (p *DBConfig) initPort() {
+	port := p.Base.ParseIntWithDefault("db.port", 3306)
+	p.Port = port
+}
+
+func (p *DBConfig) initDbName() {
+	dbName, err := p.Base.Load("db.dbName")
+	if err != nil {
+		panic(err)
+	}
+	p.DBName = dbName
+}
+
+func (p *DBConfig) initDriverName() {
+	driverName, err := p.Base.Load("db.driverName")
+	if err != nil {
+		panic(err)
+	}
+	p.DriverName = driverName
+}
+
+func (p *DBConfig) initMaxOpenConns() {
+	maxOpenConns := p.Base.ParseIntWithDefault("database.maxOpenConns", 20)
+	p.MaxOpenConns = maxOpenConns
+}
+
+func (p *DBConfig) initMaxIdleConns() {
+	maxIdleConns := p.Base.ParseIntWithDefault("database.maxIdleConns", 5)
+	p.MaxIdleConns = maxIdleConns
 }
 
 ///////////////////////////////////////////////////////////////////////////////

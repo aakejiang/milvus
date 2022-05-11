@@ -26,6 +26,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/milvus-io/milvus/internal/metastore"
+
 	"github.com/golang/protobuf/proto"
 	"github.com/milvus-io/milvus/internal/kv"
 	etcdkv "github.com/milvus-io/milvus/internal/kv/etcd"
@@ -121,40 +123,40 @@ func Test_MockKV(t *testing.T) {
 	assert.EqualError(t, err, "load prefix error")
 
 	// collection
-	prefix[kvmetestore.CollectionMetaPrefix] = []string{"collection-meta"}
+	prefix[metastore.CollectionMetaPrefix] = []string{"collection-meta"}
 	_, err = NewMetaTable(context.TODO(), kt, k1)
 	assert.NotNil(t, err)
 
 	value, err := proto.Marshal(&pb.CollectionInfo{Schema: &schemapb.CollectionSchema{}})
 	assert.Nil(t, err)
-	prefix[kvmetestore.CollectionMetaPrefix] = []string{string(value)}
+	prefix[metastore.CollectionMetaPrefix] = []string{string(value)}
 	_, err = NewMetaTable(context.TODO(), kt, k1)
 	assert.NotNil(t, err)
 
 	// segment index
-	prefix[kvmetestore.SegmentIndexMetaPrefix] = []string{"segment-index-meta"}
+	prefix[metastore.SegmentIndexMetaPrefix] = []string{"segment-index-meta"}
 	_, err = NewMetaTable(context.TODO(), kt, k1)
 	assert.NotNil(t, err)
 
 	value, err = proto.Marshal(&pb.SegmentIndexInfo{})
 	assert.Nil(t, err)
-	prefix[kvmetestore.SegmentIndexMetaPrefix] = []string{string(value)}
+	prefix[metastore.SegmentIndexMetaPrefix] = []string{string(value)}
 	_, err = NewMetaTable(context.TODO(), kt, k1)
 	assert.NotNil(t, err)
 
-	prefix[kvmetestore.SegmentIndexMetaPrefix] = []string{string(value), string(value)}
+	prefix[metastore.SegmentIndexMetaPrefix] = []string{string(value), string(value)}
 	_, err = NewMetaTable(context.TODO(), kt, k1)
 	assert.NotNil(t, err)
 	assert.EqualError(t, err, "load prefix error")
 
 	// index
-	prefix[kvmetestore.IndexMetaPrefix] = []string{"index-meta"}
+	prefix[metastore.IndexMetaPrefix] = []string{"index-meta"}
 	_, err = NewMetaTable(context.TODO(), kt, k1)
 	assert.NotNil(t, err)
 
 	value, err = proto.Marshal(&pb.IndexInfo{})
 	assert.Nil(t, err)
-	prefix[kvmetestore.IndexMetaPrefix] = []string{string(value)}
+	prefix[metastore.IndexMetaPrefix] = []string{string(value)}
 	_, err = NewMetaTable(context.TODO(), kt, k1)
 	assert.NotNil(t, err)
 	assert.EqualError(t, err, "load prefix error")
@@ -197,7 +199,7 @@ func TestMetaTable(t *testing.T) {
 	require.Nil(t, err)
 	defer etcdCli.Close()
 
-	skv, err := kvmetestore.NewMetaSnapshot(etcdCli, rootPath, TimestampPrefix, 7)
+	skv, err := kvmetestore.NewMetaSnapshot(etcdCli, rootPath, metastore.TimestampPrefix, 7)
 	assert.Nil(t, err)
 	assert.NotNil(t, skv)
 	txnKV := etcdkv.NewEtcdKV(etcdCli, rootPath)
@@ -296,7 +298,7 @@ func TestMetaTable(t *testing.T) {
 		assert.Equal(t, collInfo.Fields[0].FieldID, field.FieldID)
 
 		// check DD operation flag
-		flag, err := mt.snapshot.Load(DDMsgSendPrefix, 0)
+		flag, err := mt.snapshot.Load(metastore.DDMsgSendPrefix, 0)
 		assert.Nil(t, err)
 		assert.Equal(t, "false", flag)
 	})
@@ -347,7 +349,7 @@ func TestMetaTable(t *testing.T) {
 		assert.Equal(t, ts, collMeta.Partitions[1].PartitionCreatedTimestamp)
 
 		// check DD operation flag
-		flag, err := mt.txn.Load(DDMsgSendPrefix)
+		flag, err := mt.txn.Load(metastore.DDMsgSendPrefix)
 		assert.Nil(t, err)
 		assert.Equal(t, "false", flag)
 	})
@@ -455,7 +457,7 @@ func TestMetaTable(t *testing.T) {
 				Value: "field110-v2",
 			},
 		}
-		assert.True(t, EqualKeyPairArray(idx[0].IndexParams, params))
+		assert.True(t, metastore.EqualKeyPairArray(idx[0].IndexParams, params))
 
 		_, idx, err = mt.GetIndexByName(collName, "idx201")
 		assert.Nil(t, err)
@@ -495,7 +497,7 @@ func TestMetaTable(t *testing.T) {
 		assert.Equal(t, partID, id)
 
 		// check DD operation flag
-		flag, err := mt.txn.Load(DDMsgSendPrefix)
+		flag, err := mt.txn.Load(metastore.DDMsgSendPrefix)
 		assert.Nil(t, err)
 		assert.Equal(t, "false", flag)
 	})
@@ -516,7 +518,7 @@ func TestMetaTable(t *testing.T) {
 		assert.NotNil(t, err)
 
 		// check DD operation flag
-		flag, err := mt.txn.Load(DDMsgSendPrefix)
+		flag, err := mt.txn.Load(metastore.DDMsgSendPrefix)
 		assert.Nil(t, err)
 		assert.Equal(t, "false", flag)
 	})
@@ -1074,7 +1076,7 @@ func TestMetaWithTimestamp(t *testing.T) {
 	assert.Nil(t, err)
 	defer etcdCli.Close()
 
-	skv, err := kvmetestore.NewMetaSnapshot(etcdCli, rootPath, TimestampPrefix, 7)
+	skv, err := kvmetestore.NewMetaSnapshot(etcdCli, rootPath, metastore.TimestampPrefix, 7)
 	assert.Nil(t, err)
 	assert.NotNil(t, skv)
 	txnKV := etcdkv.NewEtcdKV(etcdCli, rootPath)
@@ -1231,14 +1233,14 @@ func TestFixIssue10540(t *testing.T) {
 	assert.Nil(t, err)
 	defer etcdCli.Close()
 
-	skv, err := kvmetestore.NewMetaSnapshot(etcdCli, rootPath, TimestampPrefix, 7)
+	skv, err := kvmetestore.NewMetaSnapshot(etcdCli, rootPath, metastore.TimestampPrefix, 7)
 	assert.Nil(t, err)
 	assert.NotNil(t, skv)
 	//txnKV := etcdkv.NewEtcdKVWithClient(etcdCli, rootPath)
 	txnKV := memkv.NewMemoryKV()
 	// compose rc7 legace tombstone cases
-	txnKV.Save(path.Join(kvmetestore.SegmentIndexMetaPrefix, "2"), string(kvmetestore.SuffixSnapshotTombstone))
-	txnKV.Save(path.Join(kvmetestore.IndexMetaPrefix, "3"), string(kvmetestore.SuffixSnapshotTombstone))
+	txnKV.Save(path.Join(metastore.SegmentIndexMetaPrefix, "2"), string(kvmetestore.SuffixSnapshotTombstone))
+	txnKV.Save(path.Join(metastore.IndexMetaPrefix, "3"), string(kvmetestore.SuffixSnapshotTombstone))
 
 	_, err = NewMetaTable(context.TODO(), txnKV, skv)
 	assert.Nil(t, err)
