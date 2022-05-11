@@ -404,10 +404,8 @@ func (mt *MetaTable) AddPartition(collID typeutil.UniqueID, partitionName string
 	// save ddOpStr into etcd
 	metaTxn[DDMsgSendPrefix] = "false"
 	metaTxn[DDOperationPrefix] = ddOpStr
-	partition := &model.Partition{
-		Extra: metaTxn,
-	}
-	return mt.catalog.CreatePartition(mt.ctx, &coll, partition, ts)
+	coll.Extra = metaTxn
+	return mt.catalog.CreatePartition(mt.ctx, &coll, ts)
 }
 
 // GetPartitionNameByID return partition name by partition id

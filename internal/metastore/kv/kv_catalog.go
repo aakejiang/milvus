@@ -48,10 +48,24 @@ func (kc *KVCatalog) CreateCollection(ctx context.Context, coll *model.Collectio
 	return nil
 }
 
-func (kc *KVCatalog) CreatePartition(ctx context.Context, coll *model.Collection, partition *model.Partition, ts typeutil.Timestamp) error {
-	kc.CreateCollection(ctx, coll, ts)
+func (kc *KVCatalog) CreatePartition(ctx context.Context, coll *model.Collection, ts typeutil.Timestamp) error {
+	k1 := fmt.Sprintf("%s/%d", CollectionMetaPrefix, coll.CollectionID)
+	collInfo := model.ConvertToCollectionPB(coll)
+	v1, err := proto.Marshal(collInfo)
+	if err != nil {
+		log.Error("marshal fail", zap.String("key", k1), zap.Error(err))
+		return fmt.Errorf("marshal fail key:%s, err:%w", k1, err)
+	}
 
-	err := kc.Txn.MultiSave(partition.Extra)
+	kvs := map[string]string{k1: string(v1)}
+	err = kc.Snapshot.MultiSave(kvs, ts)
+	if err != nil {
+		log.Error("SnapShotKV MultiSave fail", zap.Error(err))
+		panic("SnapShotKV MultiSave fail")
+	}
+
+	// save ddOpStr into etcd
+	err = kc.Txn.MultiSave(coll.Extra)
 	if err != nil {
 		// will not panic, missing create msg
 		log.Warn("TxnKV MultiSave fail", zap.Error(err))
