@@ -14,26 +14,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package indexcoord
+package msgstream
 
 import (
-	"testing"
+	"context"
 
-	"github.com/milvus-io/milvus/internal/proto/commonpb"
-	"github.com/stretchr/testify/assert"
+	"github.com/milvus-io/milvus/internal/log"
+	"go.uber.org/zap"
 )
 
-func TestPeekClientV0(t *testing.T) {
-	pq := newPriorityQueue()
-	key := PeekClientV0(10, []*commonpb.KeyValuePair{}, []*commonpb.KeyValuePair{}, pq)
-	assert.Equal(t, UniqueID(1), key)
-}
-
-func TestPeekClientV1(t *testing.T) {
-	pq := newPriorityQueue()
-	key := PeekClientV1(10, []*commonpb.KeyValuePair{}, []*commonpb.KeyValuePair{}, pq)
-	assert.Equal(t, UniqueID(1), key)
-
-	key2 := PeekClientV1(10000, []*commonpb.KeyValuePair{}, []*commonpb.KeyValuePair{}, pq)
-	assert.Equal(t, UniqueID(0), key2)
+// unsubscribeChannels create consumer first, and unsubscribe channel through msgStream.close()
+// TODO use streamnative pulsarctl
+func UnsubscribeChannels(ctx context.Context, factory Factory, subName string, channels []string) {
+	log.Info("unsubscribe channel", zap.String("subname", subName), zap.Any("channels", channels))
+	msgStream, err := factory.NewMsgStream(ctx)
+	if err != nil {
+		log.Error("unsubscribe channels failed", zap.String("subname", subName), zap.Any("channels", channels))
+		panic(err)
+	}
+	msgStream.AsConsumer(channels, subName)
+	msgStream.Close()
 }
