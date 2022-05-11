@@ -2360,7 +2360,7 @@ func (c *Core) ReportImport(ctx context.Context, ir *rootcoordpb.ImportResult) (
 
 	// Look up collection name on collection ID.
 	var colName string
-	var colMeta *etcdpb.CollectionInfo
+	var colMeta *model.Collection
 	if colMeta, err = c.MetaTable.GetCollectionByID(ti.GetCollectionId(), 0); err != nil {
 		log.Error("failed to get collection name",
 			zap.Int64("collection ID", ti.GetCollectionId()),
@@ -2370,7 +2370,7 @@ func (c *Core) ReportImport(ctx context.Context, ir *rootcoordpb.ImportResult) (
 			Reason:    "failed to get collection name for collection ID" + strconv.FormatInt(ti.GetCollectionId(), 10),
 		}, nil
 	}
-	colName = colMeta.GetSchema().GetName()
+	colName = colMeta.Name
 
 	// When DataNode has done its thing, remove it from the busy node list.
 	func() {

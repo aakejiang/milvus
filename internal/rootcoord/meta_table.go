@@ -648,8 +648,8 @@ func (mt *MetaTable) DropIndex(collName, fieldName, indexName string) (typeutil.
 	delete(mt.indexID2Meta, dropIdxID)
 
 	// update segID2IndexMeta
-	for _, partID := range collMeta.PartitionIDs {
-		if segIDMap, ok := mt.partID2SegID[partID]; ok {
+	for _, part := range col.Partitions {
+		if segIDMap, ok := mt.partID2SegID[part.PartitionID]; ok {
 			for segID := range segIDMap {
 				if segIndexInfos, ok := mt.segID2IndexMeta[segID]; ok {
 					delete(segIndexInfos, dropIdxID)
@@ -780,53 +780,53 @@ func (mt *MetaTable) unlockIsSegmentIndexed(segID typeutil.UniqueID, fieldSchema
 	return exist
 }
 
-func (mt *MetaTable) unlockGetCollectionInfo(collName string) (pb.CollectionInfo, error) {
+func (mt *MetaTable) unlockGetCollectionInfo(collName string) (model.Collection, error) {
 	collID, ok := mt.collName2ID[collName]
 	if !ok {
 		collID, ok = mt.collAlias2ID[collName]
 		if !ok {
-			return pb.CollectionInfo{}, fmt.Errorf("collection not found: %s", collName)
+			return model.Collection{}, fmt.Errorf("collection not found: %s", collName)
 		}
 	}
 	collMeta, ok := mt.collID2Meta[collID]
 	if !ok {
-		return pb.CollectionInfo{}, fmt.Errorf("collection not found: %s", collName)
+		return model.Collection{}, fmt.Errorf("collection not found: %s", collName)
 	}
 	return collMeta, nil
 }
 
-func (mt *MetaTable) checkFieldCanBeIndexed(collMeta pb.CollectionInfo, fieldSchema schemapb.FieldSchema, idxInfo *pb.IndexInfo) error {
+func (mt *MetaTable) checkFieldCanBeIndexed(collMeta model.Collection, fieldSchema model.Field, idxInfo *model.Index) error {
 	for _, f := range collMeta.FieldIndexes {
-		if f.GetFiledID() == fieldSchema.GetFieldID() {
-			if info, ok := mt.indexID2Meta[f.GetIndexID()]; ok {
-				if idxInfo.GetIndexName() != info.GetIndexName() {
+		if f.FieldID == fieldSchema.FieldID {
+			if info, ok := mt.indexID2Meta[f.IndexID]; ok {
+				if idxInfo.IndexName != info.IndexName {
 					return fmt.Errorf(
 						"creating multiple indexes on same field is not supported, "+
 							"collection: %s, field: %s, index name: %s, new index name: %s",
-						collMeta.GetSchema().GetName(), fieldSchema.GetName(),
-						info.GetIndexName(), idxInfo.GetIndexName())
+						collMeta.Name, fieldSchema.Name,
+						info.IndexName, idxInfo.IndexName)
 				}
 			} else {
 				// TODO: unexpected: what if index id not exist? Meta incomplete.
 				log.Warn("index meta was incomplete, index id missing in indexID2Meta",
-					zap.String("collection", collMeta.GetSchema().GetName()),
-					zap.String("field", fieldSchema.GetName()),
-					zap.Int64("collection id", collMeta.GetID()),
-					zap.Int64("field id", fieldSchema.GetFieldID()),
-					zap.Int64("index id", f.GetIndexID()))
+					zap.String("collection", collMeta.Name),
+					zap.String("field", fieldSchema.Name),
+					zap.Int64("collection id", collMeta.CollectionID),
+					zap.Int64("field id", fieldSchema.FieldID),
+					zap.Int64("index id", f.IndexID))
 			}
 		}
 	}
 	return nil
 }
 
-func (mt *MetaTable) checkFieldIndexDuplicate(collMeta pb.CollectionInfo, fieldSchema schemapb.FieldSchema, idxInfo *pb.IndexInfo) (duplicate bool, err error) {
+func (mt *MetaTable) checkFieldIndexDuplicate(collMeta model.Collection, fieldSchema model.Field, idxInfo *model.Index) (duplicate bool, err error) {
 	for _, f := range collMeta.FieldIndexes {
 		if info, ok := mt.indexID2Meta[f.IndexID]; ok {
 			if info.IndexName == idxInfo.IndexName {
 				// the index name must be different for different indexes
-				if f.FiledID != fieldSchema.FieldID || !EqualKeyPairArray(info.IndexParams, idxInfo.IndexParams) {
-					return false, fmt.Errorf("index already exists, collection: %s, field: %s, index: %s", collMeta.GetSchema().GetName(), fieldSchema.GetName(), idxInfo.GetIndexName())
+				if f.FieldID != fieldSchema.FieldID || !EqualKeyPairArray(info.IndexParams, idxInfo.IndexParams) {
+					return false, fmt.Errorf("index already exists, collection: %s, field: %s, index: %s", collMeta.Name, fieldSchema.Name, idxInfo.IndexName)
 				}
 
 				// same index name, index params, and fieldId
@@ -845,7 +845,7 @@ func (mt *MetaTable) GetNotIndexedSegments(collName string, fieldName string, id
 	collMeta, err := mt.unlockGetCollectionInfo(collName)
 	if err != nil {
 		// error here if collection not found.
-		return nil, schemapb.FieldSchema{}, err
+		return nil, model.Field{}, err
 	}
 
 	fieldSchema, err := mt.unlockGetFieldSchema(collName, fieldName)
@@ -869,7 +869,7 @@ func (mt *MetaTable) GetNotIndexedSegments(collName string, fieldName string, id
 	}
 
 	if err := mt.checkFieldCanBeIndexed(collMeta, fieldSchema, idxInfo); err != nil {
-		return nil, schemapb.FieldSchema{}, err
+		return nil, model.Field{}, err
 	}
 
 	dupIdx, err := mt.checkFieldIndexDuplicate(collMeta, fieldSchema, idxInfo)
@@ -884,18 +884,18 @@ func (mt *MetaTable) GetNotIndexedSegments(collName string, fieldName string, id
 			FieldID: fieldSchema.FieldID,
 			IndexID: idxInfo.IndexID,
 		}
-		col.FieldIndexes = append(col.FieldIndexes, idx)
-		k1 := path.Join(kvmetestore.CollectionMetaPrefix, strconv.FormatInt(col.CollectionID, 10))
-		v1, err := proto.Marshal(model.ConvertToCollectionPB(&col))
+		collMeta.FieldIndexes = append(collMeta.FieldIndexes, idx)
+		k1 := path.Join(kvmetestore.CollectionMetaPrefix, strconv.FormatInt(collMeta.CollectionID, 10))
+		v1, err := proto.Marshal(model.ConvertToCollectionPB(&collMeta))
 		if err != nil {
 			log.Error("MetaTable GetNotIndexedSegments Marshal collMeta fail",
 				zap.String("key", k1), zap.Error(err))
 			return nil, model.Field{}, fmt.Errorf("metaTable GetNotIndexedSegments Marshal collMeta fail key:%s, err:%w", k1, err)
 		}
 
-		k2 := fmt.Sprintf("%s/%d/%d", IndexMetaPrefix, collMeta.ID, idx.IndexID)
+		k2 := fmt.Sprintf("%s/%d/%d", kvmetestore.IndexMetaPrefix, collMeta.CollectionID, idx.IndexID)
 		//k2 := path.Join(IndexMetaPrefix, strconv.FormatInt(idx.IndexID, 10))
-		v2, err := proto.Marshal(idxInfo)
+		v2, err := proto.Marshal(model.ConvertToIndexPB(idxInfo))
 		if err != nil {
 			log.Error("MetaTable GetNotIndexedSegments Marshal idxInfo fail",
 				zap.String("key", k2), zap.Error(err))
@@ -909,7 +909,7 @@ func (mt *MetaTable) GetNotIndexedSegments(collName string, fieldName string, id
 			panic("TxnKV MultiSave fail")
 		}
 
-		mt.collID2Meta[col.CollectionID] = col
+		mt.collID2Meta[collMeta.CollectionID] = collMeta
 		mt.indexID2Meta[idx.IndexID] = *idxInfo
 	}
 

@@ -979,12 +979,12 @@ func TestMetaTable(t *testing.T) {
 		assert.EqualError(t, err, fmt.Sprintf("collection %s doesn't have filed no-field", collInfo.Name))
 
 		bakMeta := mt.indexID2Meta
-		mt.indexID2Meta = make(map[int64]pb.IndexInfo)
+		mt.indexID2Meta = make(map[int64]model.Index)
 		mockTxnKV.multiSave = func(kvs map[string]string) error {
 			return fmt.Errorf("multi save error")
 		}
 		assert.Panics(t, func() {
-			_, _, _ = mt.GetNotIndexedSegments(collInfo.Schema.Name, collInfo.Schema.Fields[0].Name, idxInfo[0], []UniqueID{10001, 10002})
+			_, _, _ = mt.GetNotIndexedSegments(collInfo.Name, collInfo.Fields[0].Name, idxInfo[0], []UniqueID{10001, 10002})
 		})
 		mt.indexID2Meta = bakMeta
 	})
@@ -1281,14 +1281,14 @@ func TestMetaTable_unlockGetCollectionInfo(t *testing.T) {
 	t.Run("normal case", func(t *testing.T) {
 		mt := &MetaTable{
 			collName2ID: map[string]typeutil.UniqueID{"test": 100},
-			collID2Meta: map[typeutil.UniqueID]pb.CollectionInfo{
-				100: {ID: 100, Schema: &schemapb.CollectionSchema{Name: "test"}},
+			collID2Meta: map[typeutil.UniqueID]model.Collection{
+				100: {CollectionID: 100, Name: "test"},
 			},
 		}
 		info, err := mt.unlockGetCollectionInfo("test")
 		assert.NoError(t, err)
-		assert.Equal(t, UniqueID(100), info.ID)
-		assert.Equal(t, "test", info.GetSchema().GetName())
+		assert.Equal(t, UniqueID(100), info.CollectionID)
+		assert.Equal(t, "test", info.Name)
 	})
 
 	t.Run("collection name not found", func(t *testing.T) {
@@ -1321,29 +1321,29 @@ func TestMetaTable_unlockGetCollectionInfo(t *testing.T) {
 func TestMetaTable_checkFieldCanBeIndexed(t *testing.T) {
 	t.Run("field not indexed", func(t *testing.T) {
 		mt := &MetaTable{}
-		collMeta := pb.CollectionInfo{
-			FieldIndexes: []*pb.FieldIndexInfo{{FiledID: 100, IndexID: 200}},
+		collMeta := model.Collection{
+			FieldIndexes: []*model.Index{{FieldID: 100, IndexID: 200}},
 		}
-		fieldSchema := schemapb.FieldSchema{
+		fieldSchema := model.Field{
 			FieldID: 101,
 		}
-		idxInfo := &pb.IndexInfo{}
+		idxInfo := &model.Index{}
 		err := mt.checkFieldCanBeIndexed(collMeta, fieldSchema, idxInfo)
 		assert.NoError(t, err)
 	})
 
 	t.Run("field already indexed", func(t *testing.T) {
 		mt := &MetaTable{
-			indexID2Meta: map[typeutil.UniqueID]pb.IndexInfo{
+			indexID2Meta: map[typeutil.UniqueID]model.Index{
 				200: {IndexID: 200, IndexName: "test"},
 			},
 		}
-		collMeta := pb.CollectionInfo{
-			Schema:       &schemapb.CollectionSchema{Name: "test"},
-			FieldIndexes: []*pb.FieldIndexInfo{{FiledID: 100, IndexID: 200}},
+		collMeta := model.Collection{
+			Name:         "test",
+			FieldIndexes: []*model.Index{{FieldID: 100, IndexID: 200}},
 		}
-		fieldSchema := schemapb.FieldSchema{Name: "test", FieldID: 100}
-		idxInfo := &pb.IndexInfo{IndexName: "not_test"}
+		fieldSchema := model.Field{Name: "test", FieldID: 100}
+		idxInfo := &model.Index{IndexName: "not_test"}
 		err := mt.checkFieldCanBeIndexed(collMeta, fieldSchema, idxInfo)
 		assert.Error(t, err)
 	})
@@ -1351,15 +1351,15 @@ func TestMetaTable_checkFieldCanBeIndexed(t *testing.T) {
 	t.Run("unexpected", func(t *testing.T) {
 		mt := &MetaTable{
 			// index meta incomplete.
-			indexID2Meta: map[typeutil.UniqueID]pb.IndexInfo{},
+			indexID2Meta: map[typeutil.UniqueID]model.Index{},
 		}
-		collMeta := pb.CollectionInfo{
-			Schema:       &schemapb.CollectionSchema{Name: "test"},
-			ID:           1000,
-			FieldIndexes: []*pb.FieldIndexInfo{{FiledID: 100, IndexID: 200}},
+		collMeta := model.Collection{
+			Name:         "test",
+			CollectionID: 1000,
+			FieldIndexes: []*model.Index{{FieldID: 100, IndexID: 200}},
 		}
-		fieldSchema := schemapb.FieldSchema{Name: "test", FieldID: 100}
-		idxInfo := &pb.IndexInfo{IndexName: "not_test"}
+		fieldSchema := model.Field{Name: "test", FieldID: 100}
+		idxInfo := &model.Index{IndexName: "not_test"}
 		err := mt.checkFieldCanBeIndexed(collMeta, fieldSchema, idxInfo)
 		assert.NoError(t, err)
 	})
@@ -1368,50 +1368,50 @@ func TestMetaTable_checkFieldCanBeIndexed(t *testing.T) {
 func TestMetaTable_checkFieldIndexDuplicate(t *testing.T) {
 	t.Run("index already exists", func(t *testing.T) {
 		mt := &MetaTable{
-			indexID2Meta: map[typeutil.UniqueID]pb.IndexInfo{
+			indexID2Meta: map[typeutil.UniqueID]model.Index{
 				200: {IndexID: 200, IndexName: "test"},
 			},
 		}
-		collMeta := pb.CollectionInfo{
-			Schema:       &schemapb.CollectionSchema{Name: "test"},
-			FieldIndexes: []*pb.FieldIndexInfo{{FiledID: 100, IndexID: 200}},
+		collMeta := model.Collection{
+			Name:         "test",
+			FieldIndexes: []*model.Index{{FieldID: 100, IndexID: 200}},
 		}
-		fieldSchema := schemapb.FieldSchema{Name: "test", FieldID: 101}
-		idxInfo := &pb.IndexInfo{IndexName: "test"}
+		fieldSchema := model.Field{Name: "test", FieldID: 101}
+		idxInfo := &model.Index{IndexName: "test"}
 		_, err := mt.checkFieldIndexDuplicate(collMeta, fieldSchema, idxInfo)
 		assert.Error(t, err)
 	})
 
 	t.Run("index parameters mismatch", func(t *testing.T) {
 		mt := &MetaTable{
-			indexID2Meta: map[typeutil.UniqueID]pb.IndexInfo{
+			indexID2Meta: map[typeutil.UniqueID]model.Index{
 				200: {IndexID: 200, IndexName: "test",
 					IndexParams: []*commonpb.KeyValuePair{{Key: "Key", Value: "Value"}}},
 			},
 		}
-		collMeta := pb.CollectionInfo{
-			Schema:       &schemapb.CollectionSchema{Name: "test"},
-			FieldIndexes: []*pb.FieldIndexInfo{{FiledID: 100, IndexID: 200}},
+		collMeta := model.Collection{
+			Name:         "test",
+			FieldIndexes: []*model.Index{{FieldID: 100, IndexID: 200}},
 		}
-		fieldSchema := schemapb.FieldSchema{Name: "test", FieldID: 100}
-		idxInfo := &pb.IndexInfo{IndexName: "test", IndexParams: []*commonpb.KeyValuePair{{Key: "Key", Value: "not_Value"}}}
+		fieldSchema := model.Field{Name: "test", FieldID: 100}
+		idxInfo := &model.Index{IndexName: "test", IndexParams: []*commonpb.KeyValuePair{{Key: "Key", Value: "not_Value"}}}
 		_, err := mt.checkFieldIndexDuplicate(collMeta, fieldSchema, idxInfo)
 		assert.Error(t, err)
 	})
 
 	t.Run("index parameters match", func(t *testing.T) {
 		mt := &MetaTable{
-			indexID2Meta: map[typeutil.UniqueID]pb.IndexInfo{
+			indexID2Meta: map[typeutil.UniqueID]model.Index{
 				200: {IndexID: 200, IndexName: "test",
 					IndexParams: []*commonpb.KeyValuePair{{Key: "Key", Value: "Value"}}},
 			},
 		}
-		collMeta := pb.CollectionInfo{
-			Schema:       &schemapb.CollectionSchema{Name: "test"},
-			FieldIndexes: []*pb.FieldIndexInfo{{FiledID: 100, IndexID: 200}},
+		collMeta := model.Collection{
+			Name:         "test",
+			FieldIndexes: []*model.Index{{FieldID: 100, IndexID: 200}},
 		}
-		fieldSchema := schemapb.FieldSchema{Name: "test", FieldID: 100}
-		idxInfo := &pb.IndexInfo{IndexName: "test", IndexParams: []*commonpb.KeyValuePair{{Key: "Key", Value: "Value"}}}
+		fieldSchema := model.Field{Name: "test", FieldID: 100}
+		idxInfo := &model.Index{IndexName: "test", IndexParams: []*commonpb.KeyValuePair{{Key: "Key", Value: "Value"}}}
 		duplicate, err := mt.checkFieldIndexDuplicate(collMeta, fieldSchema, idxInfo)
 		assert.NoError(t, err)
 		assert.True(t, duplicate)
@@ -1419,13 +1419,13 @@ func TestMetaTable_checkFieldIndexDuplicate(t *testing.T) {
 
 	t.Run("field not found", func(t *testing.T) {
 		mt := &MetaTable{}
-		collMeta := pb.CollectionInfo{
-			FieldIndexes: []*pb.FieldIndexInfo{{FiledID: 100, IndexID: 200}},
+		collMeta := model.Collection{
+			FieldIndexes: []*model.Index{{FieldID: 100, IndexID: 200}},
 		}
-		fieldSchema := schemapb.FieldSchema{
+		fieldSchema := model.Field{
 			FieldID: 101,
 		}
-		idxInfo := &pb.IndexInfo{}
+		idxInfo := &model.Index{}
 		duplicate, err := mt.checkFieldIndexDuplicate(collMeta, fieldSchema, idxInfo)
 		assert.NoError(t, err)
 		assert.False(t, duplicate)
