@@ -203,10 +203,15 @@ func (mt *MetaTable) AddCollection(coll *model.Collection, ts typeutil.Timestamp
 	mt.collID2Meta[coll.CollectionID] = *coll
 	mt.collName2ID[coll.Name] = coll.CollectionID
 
-	meta := map[string]string{}
-	meta[metastore.DDMsgSendPrefix] = "false"
-	meta[metastore.DDOperationPrefix] = ddOpStr
-	coll.Extra = meta
+	if len(ddOpStr) == 0 {
+		log.Warn("DD operation is empty")
+	} else {
+		meta := map[string]string{}
+		meta[metastore.DDMsgSendPrefix] = "false"
+		meta[metastore.DDOperationPrefix] = ddOpStr
+		coll.Extra = meta
+	}
+
 	return mt.catalog.CreateCollection(mt.ctx, coll, ts)
 }
 
@@ -416,11 +421,16 @@ func (mt *MetaTable) AddPartition(collID typeutil.UniqueID, partitionName string
 		})
 	mt.collID2Meta[collID] = coll
 
-	metaTxn := map[string]string{}
-	// save ddOpStr into etcd
-	metaTxn[metastore.DDMsgSendPrefix] = "false"
-	metaTxn[metastore.DDOperationPrefix] = ddOpStr
-	coll.Extra = metaTxn
+	if len(ddOpStr) == 0 {
+		log.Warn("DD operation is empty")
+	} else {
+		metaTxn := map[string]string{}
+		// save ddOpStr into etcd
+		metaTxn[metastore.DDMsgSendPrefix] = "false"
+		metaTxn[metastore.DDOperationPrefix] = ddOpStr
+		coll.Extra = metaTxn
+	}
+
 	return mt.catalog.CreatePartition(mt.ctx, &coll, ts)
 }
 
@@ -536,11 +546,15 @@ func (mt *MetaTable) DeletePartition(collID typeutil.UniqueID, partitionName str
 	}
 	delete(mt.partID2SegID, partID)
 
-	metaTxn := make(map[string]string)
-	// save ddOpStr into etcd
-	metaTxn[metastore.DDMsgSendPrefix] = "false"
-	metaTxn[metastore.DDOperationPrefix] = ddOpStr
-	col.Extra = metaTxn
+	if len(ddOpStr) == 0 {
+		log.Warn("DD operation is empty")
+	} else {
+		metaTxn := make(map[string]string)
+		// save ddOpStr into etcd
+		metaTxn[metastore.DDMsgSendPrefix] = "false"
+		metaTxn[metastore.DDOperationPrefix] = ddOpStr
+		col.Extra = metaTxn
+	}
 
 	err := mt.catalog.DropPartition(mt.ctx, &col, partID, ts)
 	if err != nil {

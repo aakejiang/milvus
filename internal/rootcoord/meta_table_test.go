@@ -298,9 +298,8 @@ func TestMetaTable(t *testing.T) {
 		assert.Equal(t, collInfo.Fields[0].FieldID, field.FieldID)
 
 		// check DD operation flag
-		flag, err := mt.snapshot.Load(metastore.DDMsgSendPrefix, 0)
-		assert.Nil(t, err)
-		assert.Equal(t, "false", flag)
+		_, err = mt.snapshot.Load(metastore.DDMsgSendPrefix, 0)
+		assert.NotNil(t, err)
 	})
 
 	wg.Add(1)
@@ -349,9 +348,8 @@ func TestMetaTable(t *testing.T) {
 		assert.Equal(t, ts, collMeta.Partitions[1].PartitionCreatedTimestamp)
 
 		// check DD operation flag
-		flag, err := mt.txn.Load(metastore.DDMsgSendPrefix)
-		assert.Nil(t, err)
-		assert.Equal(t, "false", flag)
+		_, err := mt.txn.Load(metastore.DDMsgSendPrefix)
+		assert.NotNil(t, err)
 	})
 
 	wg.Add(1)
@@ -497,9 +495,8 @@ func TestMetaTable(t *testing.T) {
 		assert.Equal(t, partID, id)
 
 		// check DD operation flag
-		flag, err := mt.txn.Load(metastore.DDMsgSendPrefix)
-		assert.Nil(t, err)
-		assert.Equal(t, "false", flag)
+		_, err = mt.txn.Load(metastore.DDMsgSendPrefix)
+		assert.NotNil(t, err)
 	})
 
 	wg.Add(1)

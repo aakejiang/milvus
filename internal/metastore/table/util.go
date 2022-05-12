@@ -5,6 +5,7 @@ import (
 
 	"github.com/milvus-io/milvus/internal/log"
 	"github.com/milvus-io/milvus/internal/metastore/model"
+	"github.com/milvus-io/milvus/internal/proto/commonpb"
 	"github.com/milvus-io/milvus/internal/util/typeutil"
 	"go.uber.org/zap"
 )
@@ -75,14 +76,24 @@ func ConvertCollectionsToNameMap(colls []*model.Collection) map[string]*model.Co
 }
 
 func ConvertFieldDBToModel(field *Field) *model.Field {
+	var typeParams []*commonpb.KeyValuePair
+	err := json.Unmarshal([]byte(field.TypeParams), typeParams)
+	if err != nil {
+		log.Error("unmarshal TypeParams of field failed", zap.Error(err))
+	}
+	var indexParams []*commonpb.KeyValuePair
+	err = json.Unmarshal([]byte(field.IndexParams), indexParams)
+	if err != nil {
+		log.Error("unmarshal IndexParams of field failed", zap.Error(err))
+	}
 	return &model.Field{
 		FieldID:      field.FieldID,
 		Name:         field.FieldName,
 		IsPrimaryKey: field.IsPrimaryKey,
 		Description:  field.Description,
 		DataType:     field.DataType,
-		TypeParams:   field.TypeParams,
-		IndexParams:  field.IndexParams,
+		TypeParams:   typeParams,
+		IndexParams:  indexParams,
 		AutoID:       field.AutoID,
 	}
 }

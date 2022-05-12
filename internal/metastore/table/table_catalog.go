@@ -62,14 +62,24 @@ func (tc *TableCatalog) CreateCollection(ctx context.Context, collection *model.
 	sqlStr2 := "insert into field_schemas(field_id, field_name, is_primary_key, description, data_type, type_params, index_params, auto_id, collection_id, ts) values (:field_id, :field_name, :is_primary_key, :description, :data_type, :type_params, :index_params, :auto_id, :collection_id, :ts)"
 	var fields []Field
 	for _, field := range collection.Fields {
+		typeParams, err := json.Marshal(field.TypeParams)
+		if err != nil {
+			log.Error("marshal TypeParams of field failed", zap.Error(err))
+			continue
+		}
+		indexParams, err := json.Marshal(field.IndexParams)
+		if err != nil {
+			log.Error("marshal IndexParams of field failed", zap.Error(err))
+			continue
+		}
 		f := Field{
 			FieldID:      field.FieldID,
 			FieldName:    field.Name,
 			IsPrimaryKey: field.IsPrimaryKey,
 			Description:  field.Description,
 			DataType:     field.DataType,
-			TypeParams:   field.TypeParams,
-			IndexParams:  field.IndexParams,
+			TypeParams:   string(typeParams),
+			IndexParams:  string(indexParams),
 			AutoID:       field.AutoID,
 			CollectionID: collection.CollectionID,
 			Timestamp:    ts,
@@ -102,19 +112,20 @@ func (tc *TableCatalog) CreateCollection(ctx context.Context, collection *model.
 	}
 
 	// sql 4
-	sqlStr4 := "insert into dd_msg_send(operation_type, operation_body, is_sent, ts) values (?,?,?,?)"
-	ddOpStr := collection.Extra[metastore.DDOperationPrefix]
-	var ddOp metastore.DdOperation
-	err = metastore.DecodeDdOperation(ddOpStr, &ddOp)
-	if err != nil {
-		log.Error("decode DD operation failed", zap.Error(err))
-		return err
-	}
-	isDDMsgSent := "false"
-	_, err = tx.Exec(sqlStr4, ddOp.Type, ddOpStr, isDDMsgSent, ts)
-	if err != nil {
-		log.Error("insert dd_msg_send failed", zap.Error(err))
-		return err
+	if ddOpStr, ok := collection.Extra[metastore.DDOperationPrefix]; ok {
+		sqlStr4 := "insert into dd_msg_send(operation_type, operation_body, is_sent, ts) values (?,?,?,?)"
+		var ddOp metastore.DdOperation
+		err = metastore.DecodeDdOperation(ddOpStr, &ddOp)
+		if err != nil {
+			log.Error("decode DD operation failed", zap.Error(err))
+			return err
+		}
+		isDDMsgSent := "false"
+		_, err = tx.Exec(sqlStr4, ddOp.Type, ddOpStr, isDDMsgSent, ts)
+		if err != nil {
+			log.Error("insert dd_msg_send failed", zap.Error(err))
+			return err
+		}
 	}
 
 	return nil
@@ -302,19 +313,20 @@ func (tc *TableCatalog) DropCollection(ctx context.Context, collectionInfo *mode
 	log.Debug("table indexes_builder RowsAffected:", zap.Any("rows", n))
 
 	// sql 5
-	sqlStr5 := "insert into dd_msg_send(operation_type, operation_body, is_sent, ts) values (?,?,?,?)"
-	ddOpStr := collectionInfo.Extra[metastore.DDOperationPrefix]
-	var ddOp metastore.DdOperation
-	err = metastore.DecodeDdOperation(ddOpStr, &ddOp)
-	if err != nil {
-		log.Error("decode DD operation failed", zap.Error(err))
-		return err
-	}
-	isDDMsgSent := "false"
-	_, err = tx.Exec(sqlStr5, ddOp.Type, ddOpStr, isDDMsgSent, ts)
-	if err != nil {
-		log.Error("insert dd_msg_send failed", zap.Error(err))
-		return err
+	if ddOpStr, ok := collectionInfo.Extra[metastore.DDOperationPrefix]; ok {
+		sqlStr5 := "insert into dd_msg_send(operation_type, operation_body, is_sent, ts) values (?,?,?,?)"
+		var ddOp metastore.DdOperation
+		err = metastore.DecodeDdOperation(ddOpStr, &ddOp)
+		if err != nil {
+			log.Error("decode DD operation failed", zap.Error(err))
+			return err
+		}
+		isDDMsgSent := "false"
+		_, err = tx.Exec(sqlStr5, ddOp.Type, ddOpStr, isDDMsgSent, ts)
+		if err != nil {
+			log.Error("insert dd_msg_send failed", zap.Error(err))
+			return err
+		}
 	}
 
 	return err
@@ -363,7 +375,7 @@ func (tc *TableCatalog) DropPartition(ctx context.Context, collection *model.Col
 }
 
 func (tc *TableCatalog) CreateIndex(ctx context.Context, index *model.Index) error {
-	sqlStr := "insert into indexes_builder(field_id, enable_index, index_id, index_name, build_id, index_params, index_file_paths, index_size, collection_id) values (:field_id, :enable_index, :index_id, :index_name, :build_id, :index_params, :index_file_paths, :index_size, :collection_id)"
+	sqlStr := "insert into indexes_builder(field_id, index_id, index_name, build_id, index_params, index_file_paths, index_size, collection_id) values (:field_id, :index_id, :index_name, :build_id, :index_params, :index_file_paths, :index_size, :collection_id)"
 	fi := IndexBuilder{
 		FieldID:        index.FieldID,
 		IndexID:        index.IndexID,
@@ -404,11 +416,11 @@ func (tc *TableCatalog) DropIndex(ctx context.Context, collectionInfo *model.Col
 }
 
 func (tc *TableCatalog) ListSegmentIndexes(ctx context.Context) ([]*model.Index, error) {
-	sqlStr := "select collection_id, partition_id, segment_id, field_id, index_id, build_id, enable_index from indexes_builder where is_deleted=false"
+	sqlStr := "select collection_id, partition_id, segment_id, field_id, index_id, build_id from indexes_builder where is_deleted=false"
 	var indexes []*IndexBuilder
 	err := tc.DB.Select(&indexes, sqlStr)
 	if err != nil {
-		log.Error("list indexes failed", zap.Error(err))
+		log.Error("list segment indexes failed", zap.Error(err))
 		return nil, err
 	}
 	return BatchConvertIndexDBToModel(indexes), nil
