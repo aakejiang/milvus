@@ -128,10 +128,10 @@ func (tc *TableCatalog) GetCollectionByID(ctx context.Context, collectionID type
 		" join indexes_builder i on c.collection_id = i.collection_id " +
 		" where c.is_deleted=false and f.is_deleted=false and p.is_deleted=false and i.is_deleted=false and c.collection_id=? and c.ts=?"
 	var result []struct {
-		*Collection   `db:"c"`
-		*Partition    `db:"p"`
-		*Field        `db:"f"`
-		*IndexBuilder `db:"i"`
+		Collection
+		Partition
+		Field
+		IndexBuilder
 	}
 	err := tc.DB.Select(&result, sqlStr, collectionID, ts)
 	if err != nil {
@@ -141,7 +141,7 @@ func (tc *TableCatalog) GetCollectionByID(ctx context.Context, collectionID type
 
 	var colls []*model.Collection
 	for _, record := range result {
-		c := ConvertCollectionDBToModel(record.Collection, record.Partition, record.Field, record.IndexBuilder)
+		c := ConvertCollectionDBToModel(&record.Collection, &record.Partition, &record.Field, &record.IndexBuilder)
 		colls = append(colls, c)
 	}
 	collMap := ConvertCollectionsToIDMap(colls)
@@ -180,10 +180,10 @@ func (tc *TableCatalog) ListCollections(ctx context.Context, ts typeutil.Timesta
 		" join indexes_builder i on c.collection_id = i.collection_id" +
 		" where c.is_deleted=false and f.is_deleted=false and p.is_deleted=false and i.is_deleted=false and c.ts=?"
 	var result []struct {
-		Collection   `db:"c"`
-		Partition    `db:"p"`
-		Field        `db:"f"`
-		IndexBuilder `db:"i"`
+		Collection
+		Partition
+		Field
+		IndexBuilder
 	}
 	err := tc.DB.Select(&result, sqlStr, ts)
 	if err != nil {
