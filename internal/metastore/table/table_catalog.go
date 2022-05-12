@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 
 	"github.com/jmoiron/sqlx"
 	"github.com/milvus-io/milvus/internal/log"
@@ -119,45 +120,90 @@ func (tc *TableCatalog) CreateCollection(ctx context.Context, collection *model.
 }
 
 func (tc *TableCatalog) GetCollectionByID(ctx context.Context, collectionID typeutil.UniqueID, ts typeutil.Timestamp) (*model.Collection, error) {
-	sqlStr := "select tenant_id, collection_id, collection_name, description, auto_id, ts, properties, created_time from collections where collection_id=? and ts=? and is_deleted=false"
-	var coll *Collection
-	err := tc.DB.Get(&coll, sqlStr, collectionID, ts)
+	sqlStr := "select tenant_id, collection_id, collection_name, description, auto_id, ts, properties, created_time " +
+		" from collections c " +
+		" join field_schemas f on c.collection_id = f.collection_id and c.ts = f.ts" +
+		" join partitions p on c.collection_id = p.collection_id and c.ts = p.ts" +
+		" join index_builders i on c.collection_id = i.collection_id " +
+		" where is_deleted=false and c.collection_id=? and c.ts=?"
+	var result []struct {
+		*Collection
+		*Partition    `db:"p"`
+		*Field        `db:"f"`
+		*IndexBuilder `db:"i"`
+	}
+	err := tc.DB.Get(&result, sqlStr, collectionID, ts)
 	if err != nil {
-		log.Error("get collection by id failed", zap.Error(err))
+		log.Error("get collection by id failed", zap.Int64("collID", collectionID), zap.Uint64("ts", ts), zap.Error(err))
 		return nil, err
 	}
-	return ConvertCollectionDBToModel(coll), nil
+
+	var colls []*model.Collection
+	for _, record := range result {
+		c := ConvertCollectionDBToModel(record.Collection, record.Partition, record.Field, record.IndexBuilder)
+		colls = append(colls, c)
+	}
+	collMap := ConvertCollectionsToIDMap(colls)
+	if _, ok := collMap[collectionID]; !ok {
+		log.Error("not found collection in the map", zap.Int64("collID", collectionID), zap.Uint64("ts", ts), zap.Error(err))
+		return nil, fmt.Errorf("not found collection %d in the map", collectionID)
+	}
+	return collMap[collectionID], nil
+}
+
+func (tc *TableCatalog) GetCollectionIDByName(ctx context.Context, collectionName string, ts typeutil.Timestamp) (typeutil.UniqueID, error) {
+	sqlStr := "select collection_id from collections where is_deleted=false and collection_name=? and ts=?"
+	var collID typeutil.UniqueID
+	err := tc.DB.Get(collID, sqlStr, collectionName, ts)
+	if err != nil {
+		log.Error("get collection id by name failed", zap.String("collName", collectionName), zap.Uint64("ts", ts), zap.Error(err))
+		return 0, err
+	}
+	return collID, nil
 }
 
 func (tc *TableCatalog) GetCollectionByName(ctx context.Context, collectionName string, ts typeutil.Timestamp) (*model.Collection, error) {
-	sqlStr := "select tenant_id, collection_id, collection_name, description, auto_id, ts, properties, created_time from collections where collection_name=? and ts=? and is_deleted=false"
-	var coll *Collection
-	err := tc.DB.Get(&coll, sqlStr, collectionName, ts)
+	collectionID, err := tc.GetCollectionIDByName(ctx, collectionName, ts)
 	if err != nil {
-		log.Error("get collection by id failed", zap.Error(err))
+		log.Error("get collection id by name failed", zap.Int64("collID", collectionID), zap.Uint64("ts", ts), zap.Error(err))
 		return nil, err
 	}
-	return ConvertCollectionDBToModel(coll), nil
+	return tc.GetCollectionByID(ctx, collectionID, ts)
 }
 
 func (tc *TableCatalog) ListCollections(ctx context.Context, ts typeutil.Timestamp) (map[string]*model.Collection, error) {
-	sqlStr := "select collection_id, tenant_id, collection_name, description, auto_id, ts, properties, created_time from collections where ts=? and is_deleted=false"
-	var colls []*Collection
-	err := tc.DB.Select(&colls, sqlStr, ts)
+	sqlStr := "select tenant_id, collection_id, collection_name, description, auto_id, ts, properties, created_time " +
+		" from collections c " +
+		" join field_schemas f on c.collection_id = f.collection_id and c.ts = f.ts" +
+		" join partitions p on c.collection_id = p.collection_id and c.ts = p.ts" +
+		" join index_builder i on c.collection_id = i.collection_id" +
+		" where is_deleted=false and c.ts=?"
+	var result []struct {
+		*Collection
+		*Partition    `db:"p"`
+		*Field        `db:"f"`
+		*IndexBuilder `db:"i"`
+	}
+	err := tc.DB.Get(&result, sqlStr, ts)
 	if err != nil {
-		log.Error("list collection by ts failed", zap.Error(err))
+		log.Error("list collection failed", zap.Uint64("ts", ts), zap.Error(err))
 		return nil, err
 	}
-	var collMap map[string]*model.Collection
-	for _, coll := range colls {
-		collMap[coll.CollectionName] = ConvertCollectionDBToModel(coll)
+
+	var colls []*model.Collection
+	for _, record := range result {
+		c := ConvertCollectionDBToModel(record.Collection, record.Partition, record.Field, record.IndexBuilder)
+		colls = append(colls, c)
 	}
-	return collMap, nil
+	return ConvertCollectionsToNameMap(colls), nil
 }
 
 func (tc *TableCatalog) CollectionExists(ctx context.Context, collectionID typeutil.UniqueID, ts typeutil.Timestamp) bool {
-	_, err := tc.GetCollectionByID(ctx, collectionID, ts)
+	sqlStr := "select tenant_id, collection_id, collection_name, description, auto_id, ts, properties, created_time from collections where is_deleted=false and collection_id=? and ts=?"
+	var coll Collection
+	err := tc.DB.Get(&coll, sqlStr, collectionID, ts)
 	if err != nil {
+		log.Error("get collection by ID failed", zap.Int64("collID", collectionID), zap.Uint64("ts", ts), zap.Error(err))
 		// Also, an error is returned if the result set is empty.
 		return false
 	}
