@@ -6,6 +6,7 @@ import (
 )
 
 type Collection struct {
+	Id              int64              `db:"id"`
 	TenantID        string             `db:"tenant_id"`
 	CollectionID    int64              `db:"collection_id"`
 	CollectionName  string             `db:"collection_name"`
@@ -14,7 +15,9 @@ type Collection struct {
 	AutoID          bool               `db:"auto_id"`
 	Timestamp       typeutil.Timestamp `db:"ts"`
 	Properties      string             `db:"properties"`
-	CreatedTime     typeutil.Timestamp `db:"created_time"`
+	IsDeleted       bool               `db:"is_deleted"`
+	CreatedAt       typeutil.Timestamp `db:"created_at"`
+	UpdatedAt       typeutil.Timestamp `db:"updated_at"`
 }
 
 type CollProperties struct {

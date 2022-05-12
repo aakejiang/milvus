@@ -32,8 +32,6 @@ const (
 
 	// DefaultIndexSliceSize defines the default slice size of index file when serializing.
 	DefaultIndexSliceSize = 4
-
-	DefaultMetaStore = "etcd"
 )
 
 // ComponentParam is used to quickly and easily access all components' configurations.
@@ -374,7 +372,7 @@ func (p *commonConfig) initStorageType() {
 }
 
 func (p *commonConfig) initMetaStorageType() {
-	p.MetaStorageType = p.Base.LoadWithDefault("common.meta.storageType", DefaultMetaStore)
+	p.MetaStorageType = p.Base.LoadWithDefault("common.meta.storageType", "etcd")
 }
 
 func (p *commonConfig) initEnableAuthorization() {

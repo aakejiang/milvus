@@ -41,7 +41,7 @@ func ConvertCollectionDBToModel(coll *Collection, partition *Partition, field *F
 		ShardsNum:            properties.ShardsNum,
 		StartPositions:       properties.StartPositions,
 		ConsistencyLevel:     properties.ConsistencyLevel,
-		CreateTime:           coll.CreatedTime,
+		CreateTime:           coll.CreatedAt,
 		Aliases:              aliases,
 	}
 }

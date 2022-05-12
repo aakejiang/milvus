@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 
+	_ "github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
 	"github.com/milvus-io/milvus/internal/log"
 	"github.com/milvus-io/milvus/internal/metastore"
@@ -120,19 +121,19 @@ func (tc *TableCatalog) CreateCollection(ctx context.Context, collection *model.
 }
 
 func (tc *TableCatalog) GetCollectionByID(ctx context.Context, collectionID typeutil.UniqueID, ts typeutil.Timestamp) (*model.Collection, error) {
-	sqlStr := "select tenant_id, collection_id, collection_name, description, auto_id, ts, properties, created_time " +
+	sqlStr := "select c.*, f.*, p.*, i.* " +
 		" from collections c " +
 		" join field_schemas f on c.collection_id = f.collection_id and c.ts = f.ts" +
 		" join partitions p on c.collection_id = p.collection_id and c.ts = p.ts" +
-		" join index_builders i on c.collection_id = i.collection_id " +
-		" where is_deleted=false and c.collection_id=? and c.ts=?"
+		" join indexes_builder i on c.collection_id = i.collection_id " +
+		" where c.is_deleted=false and f.is_deleted=false and p.is_deleted=false and i.is_deleted=false and c.collection_id=? and c.ts=?"
 	var result []struct {
-		*Collection
+		*Collection   `db:"c"`
 		*Partition    `db:"p"`
 		*Field        `db:"f"`
 		*IndexBuilder `db:"i"`
 	}
-	err := tc.DB.Get(&result, sqlStr, collectionID, ts)
+	err := tc.DB.Select(&result, sqlStr, collectionID, ts)
 	if err != nil {
 		log.Error("get collection by id failed", zap.Int64("collID", collectionID), zap.Uint64("ts", ts), zap.Error(err))
 		return nil, err
@@ -172,19 +173,19 @@ func (tc *TableCatalog) GetCollectionByName(ctx context.Context, collectionName 
 }
 
 func (tc *TableCatalog) ListCollections(ctx context.Context, ts typeutil.Timestamp) (map[string]*model.Collection, error) {
-	sqlStr := "select tenant_id, collection_id, collection_name, description, auto_id, ts, properties, created_time " +
+	sqlStr := "select c.*, f.*, p.*, i.* " +
 		" from collections c " +
 		" join field_schemas f on c.collection_id = f.collection_id and c.ts = f.ts" +
 		" join partitions p on c.collection_id = p.collection_id and c.ts = p.ts" +
-		" join index_builder i on c.collection_id = i.collection_id" +
-		" where is_deleted=false and c.ts=?"
+		" join indexes_builder i on c.collection_id = i.collection_id" +
+		" where c.is_deleted=false and f.is_deleted=false and p.is_deleted=false and i.is_deleted=false and c.ts=?"
 	var result []struct {
-		*Collection
-		*Partition    `db:"p"`
-		*Field        `db:"f"`
-		*IndexBuilder `db:"i"`
+		Collection   `db:"c"`
+		Partition    `db:"p"`
+		Field        `db:"f"`
+		IndexBuilder `db:"i"`
 	}
-	err := tc.DB.Get(&result, sqlStr, ts)
+	err := tc.DB.Select(&result, sqlStr, ts)
 	if err != nil {
 		log.Error("list collection failed", zap.Uint64("ts", ts), zap.Error(err))
 		return nil, err
@@ -192,7 +193,7 @@ func (tc *TableCatalog) ListCollections(ctx context.Context, ts typeutil.Timesta
 
 	var colls []*model.Collection
 	for _, record := range result {
-		c := ConvertCollectionDBToModel(record.Collection, record.Partition, record.Field, record.IndexBuilder)
+		c := ConvertCollectionDBToModel(&record.Collection, &record.Partition, &record.Field, &record.IndexBuilder)
 		colls = append(colls, c)
 	}
 	return ConvertCollectionsToNameMap(colls), nil
