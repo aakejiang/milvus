@@ -74,7 +74,7 @@ func (kc *KVCatalog) CreatePartition(ctx context.Context, coll *model.Collection
 	return nil
 }
 
-func (kc *KVCatalog) CreateIndex(ctx context.Context, segIndex *model.Index) error {
+func (kc *KVCatalog) CreateIndex(ctx context.Context, segIndex *model.SegmentIndex) error {
 	k := fmt.Sprintf("%s/%d/%d/%d/%d", SegmentIndexMetaPrefix, segIndex.CollectionID, segIndex.IndexID, segIndex.PartitionID, segIndex.SegmentID)
 	segIdxInfo := model.ConvertToSegmentIndexPB(segIndex)
 	v, err := proto.Marshal(segIdxInfo)
@@ -348,13 +348,13 @@ func (kc *KVCatalog) ListAliases(ctx context.Context) ([]*model.Collection, erro
 	return colls, nil
 }
 
-func (kc *KVCatalog) ListSegmentIndexes(ctx context.Context) ([]*model.Index, error) {
+func (kc *KVCatalog) ListSegmentIndexes(ctx context.Context) ([]*model.SegmentIndex, error) {
 	_, values, err := kc.Txn.LoadWithPrefix(SegmentIndexMetaPrefix)
 	if err != nil {
 		log.Error("load with prefix error", zap.Error(err))
 		return nil, err
 	}
-	var indexes []*model.Index
+	var indexes []*model.SegmentIndex
 	for _, value := range values {
 		if bytes.Equal([]byte(value), SuffixSnapshotTombstone) {
 			// backward compatibility, IndexMeta used to be in SnapshotKV

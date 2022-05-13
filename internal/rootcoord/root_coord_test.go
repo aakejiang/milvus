@@ -3045,7 +3045,7 @@ func TestCheckFlushedSegments(t *testing.T) {
 		var segID int64 = 1001
 		var fieldID int64 = 101
 		var indexID int64 = 6001
-		core.MetaTable.segID2IndexMeta[segID] = make(map[int64]model.Index)
+		core.MetaTable.segID2IndexMeta[segID] = make(map[int64]model.SegmentIndex)
 		core.MetaTable.partID2SegID[partID] = make(map[int64]bool)
 		core.MetaTable.collID2Meta[collID] = model.Collection{CollectionID: collID}
 		// do nothing, since collection has 0 index
@@ -3276,16 +3276,18 @@ func TestCore_DescribeSegments(t *testing.T) {
 
 	// success.
 	c.MetaTable = &MetaTable{
-		segID2IndexMeta: map[typeutil.UniqueID]map[typeutil.UniqueID]model.Index{
+		segID2IndexMeta: map[typeutil.UniqueID]map[typeutil.UniqueID]model.SegmentIndex{
 			segID: {
 				indexID: {
-					CollectionID: collID,
-					PartitionID:  partID,
-					SegmentID:    segID,
-					FieldID:      fieldID,
-					IndexID:      indexID,
-					BuildID:      buildID,
-					EnableIndex:  true,
+					Index: model.Index{
+						CollectionID: collID,
+						FieldID:      fieldID,
+						IndexID:      indexID,
+					},
+					PartitionID: partID,
+					SegmentID:   segID,
+					BuildID:     buildID,
+					EnableIndex: true,
 				},
 			},
 		},

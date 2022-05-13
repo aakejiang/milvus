@@ -74,13 +74,13 @@ type MetaTable struct {
 	snapshot kv.SnapShotKV // client of a reliable snapshotkv service, i.e. etcd client
 	catalog  metastore.Catalog
 
-	proxyID2Meta    map[typeutil.UniqueID]pb.ProxyMeta                      // proxy id to proxy meta
-	collID2Meta     map[typeutil.UniqueID]model.Collection                  // collection id -> collection meta
-	collName2ID     map[string]typeutil.UniqueID                            // collection name to collection id
-	collAlias2ID    map[string]typeutil.UniqueID                            // collection alias to collection id
-	partID2SegID    map[typeutil.UniqueID]map[typeutil.UniqueID]bool        // partition id -> segment_id -> bool
-	segID2IndexMeta map[typeutil.UniqueID]map[typeutil.UniqueID]model.Index // collection id/index_id/partition_id/segment_id -> meta
-	indexID2Meta    map[typeutil.UniqueID]model.Index                       // collection id/index_id -> meta
+	proxyID2Meta    map[typeutil.UniqueID]pb.ProxyMeta                             // proxy id to proxy meta
+	collID2Meta     map[typeutil.UniqueID]model.Collection                         // collection id -> collection meta
+	collName2ID     map[string]typeutil.UniqueID                                   // collection name to collection id
+	collAlias2ID    map[string]typeutil.UniqueID                                   // collection alias to collection id
+	partID2SegID    map[typeutil.UniqueID]map[typeutil.UniqueID]bool               // partition id -> segment_id -> bool
+	segID2IndexMeta map[typeutil.UniqueID]map[typeutil.UniqueID]model.SegmentIndex // collection id/index_id/partition_id/segment_id -> meta
+	indexID2Meta    map[typeutil.UniqueID]model.Index                              // collection id/index_id -> meta
 
 	proxyLock sync.RWMutex
 	ddLock    sync.RWMutex
@@ -112,7 +112,7 @@ func (mt *MetaTable) reloadFromKV() error {
 	mt.collName2ID = make(map[string]typeutil.UniqueID)
 	mt.collAlias2ID = make(map[string]typeutil.UniqueID)
 	mt.partID2SegID = make(map[typeutil.UniqueID]map[typeutil.UniqueID]bool)
-	mt.segID2IndexMeta = make(map[typeutil.UniqueID]map[typeutil.UniqueID]model.Index)
+	mt.segID2IndexMeta = make(map[typeutil.UniqueID]map[typeutil.UniqueID]model.SegmentIndex)
 	mt.indexID2Meta = make(map[typeutil.UniqueID]model.Index)
 
 	collMap, err := mt.catalog.ListCollections(mt.ctx, 0)
@@ -144,7 +144,7 @@ func (mt *MetaTable) reloadFromKV() error {
 		if ok {
 			idx[segIndexInfo.IndexID] = *segIndexInfo
 		} else {
-			meta := make(map[typeutil.UniqueID]model.Index)
+			meta := make(map[typeutil.UniqueID]model.SegmentIndex)
 			meta[segIndexInfo.IndexID] = *segIndexInfo
 			mt.segID2IndexMeta[segIndexInfo.SegmentID] = meta
 		}
@@ -535,7 +535,7 @@ func (mt *MetaTable) DeletePartition(collID typeutil.UniqueID, partitionName str
 }
 
 // AddIndex add index
-func (mt *MetaTable) AddIndex(segIdxInfo *model.Index) error {
+func (mt *MetaTable) AddIndex(segIdxInfo *model.SegmentIndex) error {
 	mt.ddLock.Lock()
 	defer mt.ddLock.Unlock()
 
@@ -562,7 +562,7 @@ func (mt *MetaTable) AddIndex(segIdxInfo *model.Index) error {
 
 	segIdxMap, ok := mt.segID2IndexMeta[segIdxInfo.SegmentID]
 	if !ok {
-		idxMap := map[typeutil.UniqueID]model.Index{segIdxInfo.IndexID: *segIdxInfo}
+		idxMap := map[typeutil.UniqueID]model.SegmentIndex{segIdxInfo.IndexID: *segIdxInfo}
 		mt.segID2IndexMeta[segIdxInfo.SegmentID] = idxMap
 	} else {
 		tmpInfo, ok := segIdxMap[segIdxInfo.IndexID]
@@ -580,14 +580,16 @@ func (mt *MetaTable) AddIndex(segIdxInfo *model.Index) error {
 	mt.segID2IndexMeta[segIdxInfo.SegmentID][segIdxInfo.IndexID] = *segIdxInfo
 	mt.partID2SegID[segIdxInfo.PartitionID][segIdxInfo.SegmentID] = true
 
-	index := &model.Index{
-		CollectionID: segIdxInfo.CollectionID,
-		PartitionID:  segIdxInfo.PartitionID,
-		SegmentID:    segIdxInfo.SegmentID,
-		FieldID:      segIdxInfo.FieldID,
-		IndexID:      segIdxInfo.IndexID,
-		BuildID:      segIdxInfo.BuildID,
-		EnableIndex:  segIdxInfo.EnableIndex,
+	index := &model.SegmentIndex{
+		Index: model.Index{
+			CollectionID: segIdxInfo.CollectionID,
+			FieldID:      segIdxInfo.FieldID,
+			IndexID:      segIdxInfo.IndexID,
+		},
+		SegmentID:   segIdxInfo.SegmentID,
+		PartitionID: segIdxInfo.PartitionID,
+		BuildID:     segIdxInfo.BuildID,
+		EnableIndex: segIdxInfo.EnableIndex,
 	}
 	return mt.catalog.CreateIndex(mt.ctx, index)
 }
@@ -666,22 +668,24 @@ func (mt *MetaTable) DropIndex(collName, fieldName, indexName string) (typeutil.
 }
 
 // GetSegmentIndexInfoByID return segment index info by segment id
-func (mt *MetaTable) GetSegmentIndexInfoByID(segID typeutil.UniqueID, fieldID int64, idxName string) (model.Index, error) {
+func (mt *MetaTable) GetSegmentIndexInfoByID(segID typeutil.UniqueID, fieldID int64, idxName string) (model.SegmentIndex, error) {
 	mt.ddLock.RLock()
 	defer mt.ddLock.RUnlock()
 
 	segIdxMap, ok := mt.segID2IndexMeta[segID]
 	if !ok {
-		return model.Index{
+		return model.SegmentIndex{
+			Index: model.Index{
+				FieldID: fieldID,
+				IndexID: 0,
+			},
 			SegmentID:   segID,
-			FieldID:     fieldID,
-			IndexID:     0,
 			BuildID:     0,
 			EnableIndex: false,
 		}, nil
 	}
 	if len(segIdxMap) == 0 {
-		return model.Index{}, fmt.Errorf("segment id %d not has any index", segID)
+		return model.SegmentIndex{}, fmt.Errorf("segment id %d not has any index", segID)
 	}
 
 	if fieldID == -1 && idxName == "" { // return default index
@@ -705,10 +709,10 @@ func (mt *MetaTable) GetSegmentIndexInfoByID(segID typeutil.UniqueID, fieldID in
 			}
 		}
 	}
-	return model.Index{}, fmt.Errorf("can't find index name = %s on segment = %d, with filed id = %d", idxName, segID, fieldID)
+	return model.SegmentIndex{}, fmt.Errorf("can't find index name = %s on segment = %d, with filed id = %d", idxName, segID, fieldID)
 }
 
-func (mt *MetaTable) GetSegmentIndexInfos(segID typeutil.UniqueID) (map[typeutil.UniqueID]model.Index, error) {
+func (mt *MetaTable) GetSegmentIndexInfos(segID typeutil.UniqueID) (map[typeutil.UniqueID]model.SegmentIndex, error) {
 	mt.ddLock.RLock()
 	defer mt.ddLock.RUnlock()
 
@@ -964,20 +968,20 @@ func (mt *MetaTable) GetIndexByID(indexID typeutil.UniqueID) (*model.Index, erro
 
 func (mt *MetaTable) dupMeta() (
 	map[typeutil.UniqueID]model.Collection,
-	map[typeutil.UniqueID]map[typeutil.UniqueID]model.Index,
+	map[typeutil.UniqueID]map[typeutil.UniqueID]model.SegmentIndex,
 	map[typeutil.UniqueID]model.Index,
 ) {
 	mt.ddLock.RLock()
 	defer mt.ddLock.RUnlock()
 
 	collID2Meta := map[typeutil.UniqueID]model.Collection{}
-	segID2IndexMeta := map[typeutil.UniqueID]map[typeutil.UniqueID]model.Index{}
+	segID2IndexMeta := map[typeutil.UniqueID]map[typeutil.UniqueID]model.SegmentIndex{}
 	indexID2Meta := map[typeutil.UniqueID]model.Index{}
 	for k, v := range mt.collID2Meta {
 		collID2Meta[k] = v
 	}
 	for k, v := range mt.segID2IndexMeta {
-		segID2IndexMeta[k] = map[typeutil.UniqueID]model.Index{}
+		segID2IndexMeta[k] = map[typeutil.UniqueID]model.SegmentIndex{}
 		for k2, v2 := range v {
 			segID2IndexMeta[k][k2] = v2
 		}

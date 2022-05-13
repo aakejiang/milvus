@@ -42,7 +42,7 @@ func (tc *TableCatalog) DropPartition(ctx context.Context, collectionInfo *model
 	return nil
 }
 
-func (tc *TableCatalog) CreateIndex(ctx context.Context, index *model.Index) error {
+func (tc *TableCatalog) CreateIndex(ctx context.Context, index *model.SegmentIndex) error {
 	return nil
 }
 
@@ -50,7 +50,7 @@ func (tc *TableCatalog) DropIndex(ctx context.Context, collectionInfo *model.Col
 	return nil
 }
 
-func (tc *TableCatalog) ListSegmentIndexes(ctx context.Context) ([]*model.Index, error) {
+func (tc *TableCatalog) ListSegmentIndexes(ctx context.Context) ([]*model.SegmentIndex, error) {
 	return nil, nil
 }
 

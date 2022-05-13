@@ -983,13 +983,15 @@ func (t *CreateIndexReqTask) Execute(ctx context.Context) error {
 	cnt := 0
 
 	for _, segID := range segIDs {
-		info := model.Index{
-			CollectionID: collectionID,
-			PartitionID:  segID2PartID[segID],
-			SegmentID:    segID,
-			FieldID:      field.FieldID,
-			IndexID:      idxInfo.IndexID,
-			EnableIndex:  false,
+		info := model.SegmentIndex{
+			Index: model.Index{
+				CollectionID: collectionID,
+				FieldID:      field.FieldID,
+				IndexID:      idxInfo.IndexID,
+			},
+			PartitionID: segID2PartID[segID],
+			SegmentID:   segID,
+			EnableIndex: false,
 		}
 		info.BuildID, err = t.core.BuildIndex(ctx, segID, &field, idxInfo, false)
 		if err != nil {

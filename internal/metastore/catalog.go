@@ -20,9 +20,9 @@ type Catalog interface {
 	//GetPartitionWithVersion(ctx context.Context, collectionName string, partitionName string, version int) (model.Partition, error)
 	DropPartition(ctx context.Context, collectionInfo *model.Collection, partitionID typeutil.UniqueID, ts typeutil.Timestamp) error
 
-	CreateIndex(ctx context.Context, index *model.Index) error
+	CreateIndex(ctx context.Context, index *model.SegmentIndex) error
 	DropIndex(ctx context.Context, collectionInfo *model.Collection, dropIdxID typeutil.UniqueID, ts typeutil.Timestamp) error
-	ListSegmentIndexes(ctx context.Context) ([]*model.Index, error)
+	ListSegmentIndexes(ctx context.Context) ([]*model.SegmentIndex, error)
 	ListIndexes(ctx context.Context) ([]*model.Index, error)
 
 	CreateAlias(ctx context.Context, collection *model.Collection, ts typeutil.Timestamp) error

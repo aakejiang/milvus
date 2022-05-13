@@ -355,13 +355,15 @@ func TestMetaTable(t *testing.T) {
 	wg.Add(1)
 	t.Run("add segment index", func(t *testing.T) {
 		defer wg.Done()
-		segIdxInfo := model.Index{
-			CollectionID: collID,
-			PartitionID:  partID,
-			SegmentID:    segID,
-			FieldID:      fieldID,
-			IndexID:      indexID,
-			BuildID:      buildID,
+		segIdxInfo := model.SegmentIndex{
+			Index: model.Index{
+				CollectionID: collID,
+				FieldID:      fieldID,
+				IndexID:      indexID,
+			},
+			PartitionID: partID,
+			SegmentID:   segID,
+			BuildID:     buildID,
 		}
 		err = mt.AddIndex(&segIdxInfo)
 		assert.Nil(t, err)
@@ -733,13 +735,15 @@ func TestMetaTable(t *testing.T) {
 		err = mt.AddCollection(collInfo, ts, "")
 		assert.Nil(t, err)
 
-		segIdxInfo := model.Index{
-			CollectionID: collID,
-			PartitionID:  partID,
-			SegmentID:    segID,
-			FieldID:      fieldID,
-			IndexID:      indexID2,
-			BuildID:      buildID,
+		segIdxInfo := model.SegmentIndex{
+			Index: model.Index{
+				CollectionID: collID,
+				FieldID:      fieldID,
+				IndexID:      indexID2,
+			},
+			PartitionID: partID,
+			SegmentID:   segID,
+			BuildID:     buildID,
 		}
 		err = mt.AddIndex(&segIdxInfo)
 		assert.NotNil(t, err)
@@ -858,13 +862,15 @@ func TestMetaTable(t *testing.T) {
 		assert.Equal(t, fieldID, seg.FieldID)
 		assert.Equal(t, false, seg.EnableIndex)
 
-		segIdxInfo := model.Index{
-			CollectionID: collID,
-			PartitionID:  partID,
-			SegmentID:    segID,
-			FieldID:      fieldID,
-			IndexID:      indexID,
-			BuildID:      buildID,
+		segIdxInfo := model.SegmentIndex{
+			Index: model.Index{
+				CollectionID: collID,
+				FieldID:      fieldID,
+				IndexID:      indexID,
+			},
+			PartitionID: partID,
+			SegmentID:   segID,
+			BuildID:     buildID,
 		}
 		err = mt.AddIndex(&segIdxInfo)
 		assert.Nil(t, err)
@@ -1246,22 +1252,24 @@ func TestFixIssue10540(t *testing.T) {
 
 func TestMetaTable_GetSegmentIndexInfos(t *testing.T) {
 	meta := &MetaTable{
-		segID2IndexMeta: map[typeutil.UniqueID]map[typeutil.UniqueID]model.Index{},
+		segID2IndexMeta: map[typeutil.UniqueID]map[typeutil.UniqueID]model.SegmentIndex{},
 	}
 
 	segID := typeutil.UniqueID(100)
 	_, err := meta.GetSegmentIndexInfos(segID)
 	assert.Error(t, err)
 
-	meta.segID2IndexMeta[segID] = map[typeutil.UniqueID]model.Index{
+	meta.segID2IndexMeta[segID] = map[typeutil.UniqueID]model.SegmentIndex{
 		5: {
-			CollectionID: 1,
-			PartitionID:  2,
-			SegmentID:    segID,
-			FieldID:      4,
-			IndexID:      5,
-			BuildID:      6,
-			EnableIndex:  true,
+			Index: model.Index{
+				CollectionID: 1,
+				FieldID:      4,
+				IndexID:      5,
+			},
+			PartitionID: 2,
+			SegmentID:   segID,
+			BuildID:     6,
+			EnableIndex: true,
 		},
 	}
 	infos, err := meta.GetSegmentIndexInfos(segID)
