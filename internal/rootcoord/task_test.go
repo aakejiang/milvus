@@ -64,22 +64,24 @@ func TestDescribeSegmentsReqTask_Execute(t *testing.T) {
 		return []typeutil.UniqueID{segID}, nil
 	}
 	c.MetaTable = &MetaTable{
-		segID2IndexMeta: map[typeutil.UniqueID]map[typeutil.UniqueID]model.Index{},
+		segID2IndexMeta: map[typeutil.UniqueID]map[typeutil.UniqueID]model.SegmentIndex{},
 	}
 	assert.NoError(t, tsk.Execute(context.Background()))
 
 	// index not found in meta.
 	c.MetaTable = &MetaTable{
-		segID2IndexMeta: map[typeutil.UniqueID]map[typeutil.UniqueID]model.Index{
+		segID2IndexMeta: map[typeutil.UniqueID]map[typeutil.UniqueID]model.SegmentIndex{
 			segID: {
 				indexID: {
-					CollectionID: collID,
-					PartitionID:  partID,
-					SegmentID:    segID,
-					FieldID:      fieldID,
-					IndexID:      indexID,
-					BuildID:      buildID,
-					EnableIndex:  true,
+					Index: model.Index{
+						CollectionID: collID,
+						FieldID:      fieldID,
+						IndexID:      indexID,
+					},
+					PartitionID: partID,
+					SegmentID:   segID,
+					BuildID:     buildID,
+					EnableIndex: true,
 				},
 			},
 		},
@@ -88,16 +90,18 @@ func TestDescribeSegmentsReqTask_Execute(t *testing.T) {
 
 	// success.
 	c.MetaTable = &MetaTable{
-		segID2IndexMeta: map[typeutil.UniqueID]map[typeutil.UniqueID]model.Index{
+		segID2IndexMeta: map[typeutil.UniqueID]map[typeutil.UniqueID]model.SegmentIndex{
 			segID: {
 				indexID: {
-					CollectionID: collID,
-					PartitionID:  partID,
-					SegmentID:    segID,
-					FieldID:      fieldID,
-					IndexID:      indexID,
-					BuildID:      buildID,
-					EnableIndex:  true,
+					Index: model.Index{
+						CollectionID: collID,
+						FieldID:      fieldID,
+						IndexID:      indexID,
+					},
+					PartitionID: partID,
+					SegmentID:   segID,
+					BuildID:     buildID,
+					EnableIndex: true,
 				},
 			},
 		},

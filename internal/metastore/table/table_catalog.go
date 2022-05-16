@@ -142,7 +142,7 @@ func (tc *TableCatalog) GetCollectionByID(ctx context.Context, collectionID type
 		Collection
 		Partition
 		Field
-		IndexBuilder
+		SegmentIndex
 	}
 	err := tc.DB.Select(&result, sqlStr, collectionID, ts)
 	if err != nil {
@@ -152,7 +152,7 @@ func (tc *TableCatalog) GetCollectionByID(ctx context.Context, collectionID type
 
 	var colls []*model.Collection
 	for _, record := range result {
-		c := ConvertCollectionDBToModel(&record.Collection, &record.Partition, &record.Field, &record.IndexBuilder)
+		c := ConvertCollectionDBToModel(&record.Collection, &record.Partition, &record.Field, &record.SegmentIndex)
 		colls = append(colls, c)
 	}
 	collMap := ConvertCollectionsToIDMap(colls)
@@ -194,7 +194,7 @@ func (tc *TableCatalog) ListCollections(ctx context.Context, ts typeutil.Timesta
 		Collection
 		Partition
 		Field
-		IndexBuilder
+		SegmentIndex
 	}
 	err := tc.DB.Select(&result, sqlStr, ts)
 	if err != nil {
@@ -204,7 +204,7 @@ func (tc *TableCatalog) ListCollections(ctx context.Context, ts typeutil.Timesta
 
 	var colls []*model.Collection
 	for _, record := range result {
-		c := ConvertCollectionDBToModel(&record.Collection, &record.Partition, &record.Field, &record.IndexBuilder)
+		c := ConvertCollectionDBToModel(&record.Collection, &record.Partition, &record.Field, &record.SegmentIndex)
 		colls = append(colls, c)
 	}
 	return ConvertCollectionsToNameMap(colls), nil
@@ -374,9 +374,9 @@ func (tc *TableCatalog) DropPartition(ctx context.Context, collection *model.Col
 	return nil
 }
 
-func (tc *TableCatalog) CreateIndex(ctx context.Context, index *model.Index) error {
+func (tc *TableCatalog) CreateIndex(ctx context.Context, index *model.SegmentIndex) error {
 	sqlStr := "insert into indexes_builder(field_id, index_id, index_name, build_id, index_params, index_file_paths, index_size, collection_id) values (:field_id, :index_id, :index_name, :build_id, :index_params, :index_file_paths, :index_size, :collection_id)"
-	fi := IndexBuilder{
+	fi := SegmentIndex{
 		FieldID:        index.FieldID,
 		IndexID:        index.IndexID,
 		IndexName:      index.IndexName,
@@ -415,20 +415,20 @@ func (tc *TableCatalog) DropIndex(ctx context.Context, collectionInfo *model.Col
 	return nil
 }
 
-func (tc *TableCatalog) ListSegmentIndexes(ctx context.Context) ([]*model.Index, error) {
+func (tc *TableCatalog) ListSegmentIndexes(ctx context.Context) ([]*model.SegmentIndex, error) {
 	sqlStr := "select collection_id, partition_id, segment_id, field_id, index_id, build_id from indexes_builder where is_deleted=false"
-	var indexes []*IndexBuilder
+	var indexes []*SegmentIndex
 	err := tc.DB.Select(&indexes, sqlStr)
 	if err != nil {
 		log.Error("list segment indexes failed", zap.Error(err))
 		return nil, err
 	}
-	return BatchConvertIndexDBToModel(indexes), nil
+	return BatchConvertSegmentIndexDBToModel(indexes), nil
 }
 
 func (tc *TableCatalog) ListIndexes(ctx context.Context) ([]*model.Index, error) {
-	sqlStr := "select index_id, index_name, index_params from indexes_builder where is_deleted=false"
-	var indexes []*IndexBuilder
+	sqlStr := "select index_id, index_name, index_params from indexes where is_deleted=false"
+	var indexes []*Index
 	err := tc.DB.Select(&indexes, sqlStr)
 	if err != nil {
 		log.Error("list indexes failed", zap.Error(err))

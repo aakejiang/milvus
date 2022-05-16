@@ -5,7 +5,7 @@ import (
 	"github.com/milvus-io/milvus/internal/util/typeutil"
 )
 
-type IndexBuilder struct {
+type SegmentIndex struct {
 	Id int64 `db:"id"`
 	// SegmentIndexInfo (CollectionID & PartitionID & SegmentID & FieldID & IndexID & BuildID & EnableIndex)
 	CollectionID int64 `db:"collection_id"`

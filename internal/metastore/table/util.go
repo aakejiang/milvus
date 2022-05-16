@@ -12,7 +12,7 @@ import (
 
 // model <---> db
 
-func ConvertCollectionDBToModel(coll *Collection, partition *Partition, field *Field, index *IndexBuilder) *model.Collection {
+func ConvertCollectionDBToModel(coll *Collection, partition *Partition, field *Field, index *SegmentIndex) *model.Collection {
 	var aliases []string
 	err := json.Unmarshal([]byte(coll.CollectionAlias), aliases)
 	if err != nil {
@@ -28,7 +28,7 @@ func ConvertCollectionDBToModel(coll *Collection, partition *Partition, field *F
 	var retPartitions []*model.Partition
 	retPartitions = append(retPartitions, ConvertPartitionDBToModel(partition))
 	var retIndexes []*model.Index
-	retIndexes = append(retIndexes, ConvertIndexDBToModel(index))
+	retIndexes = append(retIndexes, ConvertSegmentIndexDBToIndexModel(index))
 	return &model.Collection{
 		CollectionID:         coll.CollectionID,
 		Name:                 coll.CollectionName,
@@ -124,22 +124,53 @@ func BatchConvertPartitionDBToModel(partitons []*Partition) []*model.Partition {
 	return result
 }
 
-func ConvertIndexDBToModel(fieldIndex *IndexBuilder) *model.Index {
+func ConvertIndexDBToModel(index *Index) *model.Index {
+	return &model.Index{
+		CollectionID: index.CollectionID,
+		FieldID:      index.FieldID,
+		IndexID:      index.IndexID,
+		IndexName:    index.IndexName,
+		IndexParams:  index.IndexParams,
+	}
+}
+
+func BatchConvertIndexDBToModel(indexes []*Index) []*model.Index {
+	var result []*model.Index
+	for _, i := range indexes {
+		index := ConvertIndexDBToModel(i)
+		result = append(result, index)
+	}
+	return result
+}
+
+func ConvertSegmentIndexDBToIndexModel(fieldIndex *SegmentIndex) *model.Index {
 	return &model.Index{
 		CollectionID: fieldIndex.CollectionID,
-		PartitionID:  fieldIndex.PartitionID,
-		SegmentID:    fieldIndex.SegmentID,
 		FieldID:      fieldIndex.FieldID,
 		IndexID:      fieldIndex.IndexID,
-		BuildID:      fieldIndex.BuildID,
+		IndexName:    fieldIndex.IndexName,
+		IndexParams:  fieldIndex.IndexParams,
+	}
+}
+
+func ConvertSegmentIndexDBToModel(fieldIndex *SegmentIndex) *model.SegmentIndex {
+	return &model.SegmentIndex{
+		Index: model.Index{
+			CollectionID: fieldIndex.CollectionID,
+			FieldID:      fieldIndex.FieldID,
+			IndexID:      fieldIndex.IndexID,
+		},
+		PartitionID: fieldIndex.PartitionID,
+		SegmentID:   fieldIndex.SegmentID,
+		BuildID:     fieldIndex.BuildID,
 		//EnableIndex:  fieldIndex.EnableIndex, // TODO populate it!!!
 	}
 }
 
-func BatchConvertIndexDBToModel(fieldIndexes []*IndexBuilder) []*model.Index {
-	var indexes []*model.Index
+func BatchConvertSegmentIndexDBToModel(fieldIndexes []*SegmentIndex) []*model.SegmentIndex {
+	var indexes []*model.SegmentIndex
 	for _, fi := range fieldIndexes {
-		index := ConvertIndexDBToModel(fi)
+		index := ConvertSegmentIndexDBToModel(fi)
 		indexes = append(indexes, index)
 	}
 	return indexes

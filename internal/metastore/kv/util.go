@@ -151,7 +151,7 @@ func ConvertToCollectionPB(coll *model.Collection) *pb.CollectionInfo {
 	}
 }
 
-func ConvertToSegmentIndexPB(index *model.Index) *pb.SegmentIndexInfo {
+func ConvertToSegmentIndexPB(index *model.SegmentIndex) *pb.SegmentIndexInfo {
 	return &pb.SegmentIndexInfo{
 		CollectionID: index.CollectionID,
 		PartitionID:  index.PartitionID,
@@ -163,15 +163,17 @@ func ConvertToSegmentIndexPB(index *model.Index) *pb.SegmentIndexInfo {
 	}
 }
 
-func ConvertSegmentIndexPBToModel(segIndex *pb.SegmentIndexInfo) *model.Index {
-	return &model.Index{
-		CollectionID: segIndex.CollectionID,
-		PartitionID:  segIndex.PartitionID,
-		SegmentID:    segIndex.SegmentID,
-		FieldID:      segIndex.FieldID,
-		IndexID:      segIndex.IndexID,
-		BuildID:      segIndex.BuildID,
-		EnableIndex:  segIndex.EnableIndex,
+func ConvertSegmentIndexPBToModel(segIndex *pb.SegmentIndexInfo) *model.SegmentIndex {
+	return &model.SegmentIndex{
+		Index: model.Index{
+			CollectionID: segIndex.CollectionID,
+			FieldID:      segIndex.FieldID,
+			IndexID:      segIndex.IndexID,
+		},
+		SegmentID:   segIndex.SegmentID,
+		PartitionID: segIndex.PartitionID,
+		BuildID:     segIndex.BuildID,
+		EnableIndex: segIndex.EnableIndex,
 	}
 }
 

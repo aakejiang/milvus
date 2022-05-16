@@ -397,13 +397,15 @@ func (c *Core) checkFlushedSegments(ctx context.Context) {
 						log.Debug("index meta does not exist", zap.Int64("index_id", idxInfo.IndexID))
 						continue
 					}
-					info := model.Index{
-						CollectionID: collMeta.CollectionID,
-						PartitionID:  part.PartitionID,
-						SegmentID:    segID,
-						FieldID:      idxInfo.FieldID,
-						IndexID:      idxInfo.IndexID,
-						EnableIndex:  false,
+					info := model.SegmentIndex{
+						Index: model.Index{
+							CollectionID: collMeta.CollectionID,
+							FieldID:      idxInfo.FieldID,
+							IndexID:      idxInfo.IndexID,
+						},
+						PartitionID: part.PartitionID,
+						SegmentID:   segID,
+						EnableIndex: false,
 					}
 					log.Debug("building index by background checker",
 						zap.Int64("segment_id", segID),
@@ -2081,13 +2083,15 @@ func (c *Core) SegmentFlushCompleted(ctx context.Context, in *datapb.SegmentFlus
 			continue
 		}
 
-		info := model.Index{
-			CollectionID: in.Segment.CollectionID,
-			PartitionID:  in.Segment.PartitionID,
-			SegmentID:    segID,
-			FieldID:      fieldSch.FieldID,
-			IndexID:      idxInfo.IndexID,
-			EnableIndex:  false,
+		info := model.SegmentIndex{
+			Index: model.Index{
+				CollectionID: in.Segment.CollectionID,
+				FieldID:      fieldSch.FieldID,
+				IndexID:      idxInfo.IndexID,
+			},
+			PartitionID: in.Segment.PartitionID,
+			SegmentID:   segID,
+			EnableIndex: false,
 		}
 		info.BuildID, err = c.BuildIndex(ctx, segID, fieldSch, idxInfo, true)
 		if err == nil && info.BuildID != 0 {
