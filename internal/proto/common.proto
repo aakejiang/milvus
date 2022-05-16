@@ -42,6 +42,7 @@ enum ErrorCode {
     DeleteCredentialFailure = 31;
     GetCredentialFailure = 32;
     ListCredUsersFailure = 33;
+    NotShardLeader = 34;
 
     // internal error code.
     DDRequestRace = 1000;
@@ -222,7 +223,5 @@ enum ImportState {
     ImportDownloaded = 3;
     ImportParsed = 4;
     ImportPersisted = 5;
-    DataQueryable = 6;
-    DataIndexed = 7;
-    ImportCompleted = 8;
+    ImportCompleted = 6;
 }

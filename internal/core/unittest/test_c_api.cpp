@@ -198,6 +198,16 @@ TEST(CApiTest, SegmentTest) {
     DeleteSegment(segment);
 }
 
+template <typename Message>
+std::vector<uint8_t>
+serialize(const Message* msg) {
+    auto l = msg->ByteSize();
+    std::vector<uint8_t> ret(l);
+    auto ok = msg->SerializeToArray(ret.data(), l);
+    assert(ok);
+    return ret;
+}
+
 TEST(CApiTest, InsertTest) {
     auto c_collection = NewCollection(get_default_schema_config());
     auto segment = NewSegment(c_collection, Growing, -1);
@@ -209,10 +219,8 @@ TEST(CApiTest, InsertTest) {
     int64_t offset;
     PreInsert(segment, N, &offset);
 
-    std::string insert_data;
-    auto marshal = google::protobuf::TextFormat::PrintToString(*dataset.raw_, &insert_data);
-    assert(marshal == true);
-    auto res = Insert(segment, offset, N, dataset.row_ids_.data(), dataset.timestamps_.data(), insert_data.c_str());
+    auto insert_data = serialize(dataset.raw_);
+    auto res = Insert(segment, offset, N, dataset.row_ids_.data(), dataset.timestamps_.data(), insert_data.data(), insert_data.size());
     assert(res.error_code == Success);
 
     DeleteCollection(c_collection);
@@ -226,15 +234,163 @@ TEST(CApiTest, DeleteTest) {
     std::vector<int64_t> delete_row_ids = {100000, 100001, 100002};
     auto ids = std::make_unique<IdArray>();
     ids->mutable_int_id()->mutable_data()->Add(delete_row_ids.begin(), delete_row_ids.end());
-    std::string delete_data;
-    auto marshal = google::protobuf::TextFormat::PrintToString(*ids.get(), &delete_data);
-    assert(marshal == true);
+    auto delete_data = serialize(ids.get());
     uint64_t delete_timestamps[] = {0, 0, 0};
 
     auto offset = PreDelete(segment, 3);
 
-    auto del_res = Delete(segment, offset, 3, delete_data.c_str(), delete_timestamps);
+    auto del_res = Delete(segment, offset, 3, delete_data.data(), delete_data.size(), delete_timestamps);
     assert(del_res.error_code == Success);
+
+    DeleteCollection(collection);
+    DeleteSegment(segment);
+}
+
+TEST(CApiTest, DeleteRepeatedPksFromGrowingSegment) {
+    auto collection = NewCollection(get_default_schema_config());
+    auto segment = NewSegment(collection, Growing, -1);
+    auto col = (milvus::segcore::Collection*)collection;
+
+    int N = 10;
+    auto dataset = DataGen(col->get_schema(), N);
+
+    auto insert_data = serialize(dataset.raw_);
+
+    // first insert, pks= {0, 1, 2, 3, 4, 5, 6, 7, 8, 9}
+    int64_t offset;
+    PreInsert(segment, N, &offset);
+    auto res = Insert(segment, offset, N, dataset.row_ids_.data(), dataset.timestamps_.data(), insert_data.data(), insert_data.size());
+    assert(res.error_code == Success);
+
+    // second insert, pks= {0, 1, 2, 3, 4, 5, 6, 7, 8, 9}
+    PreInsert(segment, N, &offset);
+    res = Insert(segment, offset, N, dataset.row_ids_.data(), dataset.timestamps_.data(), insert_data.data(), insert_data.size());
+    assert(res.error_code == Success);
+
+    // create retrieve plan pks in {1, 2, 3}
+    std::vector<int64_t> retrive_row_ids = {1, 2, 3};
+    auto schema = ((milvus::segcore::Collection*)collection)->get_schema();
+    auto plan = std::make_unique<query::RetrievePlan>(*schema);
+    auto term_expr = std::make_unique<query::TermExprImpl<int64_t>>(FieldId(101), DataType::INT64, retrive_row_ids);
+    plan->plan_node_ = std::make_unique<query::RetrievePlanNode>();
+    plan->plan_node_->predicate_ = std::move(term_expr);
+    std::vector<FieldId> target_field_ids{FieldId(100), FieldId(101)};
+    plan->field_ids_ = target_field_ids;
+
+    CRetrieveResult retrieve_result;
+    res = Retrieve(segment, plan.get(), dataset.timestamps_[N - 1], &retrieve_result);
+    ASSERT_EQ(res.error_code, Success);
+    auto query_result = std::make_unique<proto::segcore::RetrieveResults>();
+    auto suc = query_result->ParseFromArray(retrieve_result.proto_blob, retrieve_result.proto_size);
+    ASSERT_TRUE(suc);
+    ASSERT_EQ(query_result->ids().int_id().data().size(), 6);
+
+    // delete data pks = {1, 2, 3}
+    std::vector<int64_t> delete_row_ids = {1, 2, 3};
+    auto ids = std::make_unique<IdArray>();
+    ids->mutable_int_id()->mutable_data()->Add(delete_row_ids.begin(), delete_row_ids.end());
+    auto delete_data = serialize(ids.get());
+    std::vector<uint64_t> delete_timestamps(3, dataset.timestamps_[N - 1]);
+
+    offset = PreDelete(segment, 3);
+    auto del_res = Delete(segment, offset, 3, delete_data.data(), delete_data.size(), delete_timestamps.data());
+    assert(del_res.error_code == Success);
+
+    // retrieve pks in {1, 2, 3}
+    res = Retrieve(segment, plan.get(), dataset.timestamps_[N - 1], &retrieve_result);
+    ASSERT_EQ(res.error_code, Success);
+
+    query_result = std::make_unique<proto::segcore::RetrieveResults>();
+    suc = query_result->ParseFromArray(retrieve_result.proto_blob, retrieve_result.proto_size);
+    ASSERT_TRUE(suc);
+    ASSERT_EQ(query_result->ids().int_id().data().size(), 0);
+
+    DeleteRetrievePlan(plan.release());
+    DeleteRetrieveResult(&retrieve_result);
+
+    DeleteCollection(collection);
+    DeleteSegment(segment);
+}
+
+TEST(CApiTest, DeleteRepeatedPksFromSealedSegment) {
+    auto collection = NewCollection(get_default_schema_config());
+    auto segment = NewSegment(collection, Sealed, -1);
+    auto col = (milvus::segcore::Collection*)collection;
+
+    int N = 20;
+    auto dataset = DataGen(col->get_schema(), N, 42, 0, 2);
+
+    for (auto& [field_id, field_meta] : col->get_schema()->get_fields()) {
+        auto array = dataset.get_col(field_id);
+        auto data = serialize(array.get());
+
+        auto load_info = CLoadFieldDataInfo{field_id.get(), data.data(), data.size(), N};
+
+        auto res = LoadFieldData(segment, load_info);
+        assert(res.error_code == Success);
+        auto count = GetRowCount(segment);
+        assert(count == N);
+    }
+
+    FieldMeta ts_field_meta(FieldName("Timestamp"), TimestampFieldID, DataType::INT64);
+    auto ts_array = CreateScalarDataArrayFrom(dataset.timestamps_.data(), N, ts_field_meta);
+    auto ts_data = serialize(ts_array.get());
+    auto load_info = CLoadFieldDataInfo{TimestampFieldID.get(), ts_data.data(), ts_data.size(), N};
+    auto res = LoadFieldData(segment, load_info);
+    assert(res.error_code == Success);
+    auto count = GetRowCount(segment);
+    assert(count == N);
+
+    FieldMeta row_id_field_meta(FieldName("RowID"), RowFieldID, DataType::INT64);
+    auto row_id_array = CreateScalarDataArrayFrom(dataset.row_ids_.data(), N, row_id_field_meta);
+    auto row_id_data = serialize(row_id_array.get());
+    load_info = CLoadFieldDataInfo{RowFieldID.get(), row_id_data.data(), row_id_data.size(), N};
+    res = LoadFieldData(segment, load_info);
+    assert(res.error_code == Success);
+    count = GetRowCount(segment);
+    assert(count == N);
+
+    // create retrieve plan pks in {1, 2, 3}
+    std::vector<int64_t> retrive_row_ids = {1, 2, 3};
+    auto schema = ((milvus::segcore::Collection*)collection)->get_schema();
+    auto plan = std::make_unique<query::RetrievePlan>(*schema);
+    auto term_expr = std::make_unique<query::TermExprImpl<int64_t>>(FieldId(101), DataType::INT64, retrive_row_ids);
+    plan->plan_node_ = std::make_unique<query::RetrievePlanNode>();
+    plan->plan_node_->predicate_ = std::move(term_expr);
+    std::vector<FieldId> target_field_ids{FieldId(100), FieldId(101)};
+    plan->field_ids_ = target_field_ids;
+
+    CRetrieveResult retrieve_result;
+    res = Retrieve(segment, plan.get(), dataset.timestamps_[N - 1], &retrieve_result);
+    ASSERT_EQ(res.error_code, Success);
+    auto query_result = std::make_unique<proto::segcore::RetrieveResults>();
+    auto suc = query_result->ParseFromArray(retrieve_result.proto_blob, retrieve_result.proto_size);
+    ASSERT_TRUE(suc);
+    ASSERT_EQ(query_result->ids().int_id().data().size(), 6);
+
+    // delete data pks = {1, 2, 3}
+    std::vector<int64_t> delete_row_ids = {1, 2, 3};
+    auto ids = std::make_unique<IdArray>();
+    ids->mutable_int_id()->mutable_data()->Add(delete_row_ids.begin(), delete_row_ids.end());
+    auto delete_data = serialize(ids.get());
+    std::vector<uint64_t> delete_timestamps(3, dataset.timestamps_[N - 1]);
+
+    auto offset = PreDelete(segment, 3);
+
+    auto del_res = Delete(segment, offset, 3, delete_data.data(), delete_data.size(), delete_timestamps.data());
+    assert(del_res.error_code == Success);
+
+    // retrieve pks in {1, 2, 3}
+    res = Retrieve(segment, plan.get(), dataset.timestamps_[N - 1], &retrieve_result);
+    ASSERT_EQ(res.error_code, Success);
+
+    query_result = std::make_unique<proto::segcore::RetrieveResults>();
+    suc = query_result->ParseFromArray(retrieve_result.proto_blob, retrieve_result.proto_size);
+    ASSERT_TRUE(suc);
+    ASSERT_EQ(query_result->ids().int_id().data().size(), 0);
+
+    DeleteRetrievePlan(plan.release());
+    DeleteRetrieveResult(&retrieve_result);
 
     DeleteCollection(collection);
     DeleteSegment(segment);
@@ -252,10 +408,8 @@ TEST(CApiTest, SearchTest) {
     int64_t offset;
     PreInsert(segment, N, &offset);
 
-    std::string insert_data;
-    auto marshal = google::protobuf::TextFormat::PrintToString(*dataset.raw_, &insert_data);
-    assert(marshal == true);
-    auto ins_res = Insert(segment, offset, N, dataset.row_ids_.data(), dataset.timestamps_.data(), insert_data.c_str());
+    auto insert_data = serialize(dataset.raw_);
+    auto ins_res = Insert(segment, offset, N, dataset.row_ids_.data(), dataset.timestamps_.data(), insert_data.data(), insert_data.size());
     ASSERT_EQ(ins_res.error_code, Success);
 
     const char* dsl_string = R"(
@@ -316,10 +470,8 @@ TEST(CApiTest, SearchTestWithExpr) {
     int64_t offset;
     PreInsert(segment, N, &offset);
 
-    std::string insert_data;
-    auto marshal = google::protobuf::TextFormat::PrintToString(*dataset.raw_, &insert_data);
-    assert(marshal == true);
-    auto ins_res = Insert(segment, offset, N, dataset.row_ids_.data(), dataset.timestamps_.data(), insert_data.c_str());
+    auto insert_data = serialize(dataset.raw_);
+    auto ins_res = Insert(segment, offset, N, dataset.row_ids_.data(), dataset.timestamps_.data(), insert_data.data(), insert_data.size());
     ASSERT_EQ(ins_res.error_code, Success);
 
     const char* serialized_expr_plan = R"(vector_anns: <
@@ -372,10 +524,8 @@ TEST(CApiTest, RetrieveTestWithExpr) {
     int64_t offset;
     PreInsert(segment, N, &offset);
 
-    std::string insert_data;
-    auto marshal = google::protobuf::TextFormat::PrintToString(*dataset.raw_, &insert_data);
-    assert(marshal == true);
-    auto ins_res = Insert(segment, offset, N, dataset.row_ids_.data(), dataset.timestamps_.data(), insert_data.c_str());
+    auto insert_data = serialize(dataset.raw_);
+    auto ins_res = Insert(segment, offset, N, dataset.row_ids_.data(), dataset.timestamps_.data(), insert_data.data(), insert_data.size());
     ASSERT_EQ(ins_res.error_code, Success);
 
     // create retrieve plan "age in [0]"
@@ -388,7 +538,7 @@ TEST(CApiTest, RetrieveTestWithExpr) {
     plan->field_ids_ = target_field_ids;
 
     CRetrieveResult retrieve_result;
-    auto res = Retrieve(segment, plan.release(), dataset.timestamps_[0], &retrieve_result);
+    auto res = Retrieve(segment, plan.get(), dataset.timestamps_[0], &retrieve_result);
     ASSERT_EQ(res.error_code, Success);
 
     DeleteRetrievePlan(plan.release());
@@ -412,10 +562,8 @@ TEST(CApiTest, GetMemoryUsageInBytesTest) {
     int64_t offset;
     PreInsert(segment, N, &offset);
 
-    std::string insert_data;
-    auto marshal = google::protobuf::TextFormat::PrintToString(*dataset.raw_, &insert_data);
-    assert(marshal == true);
-    auto res = Insert(segment, offset, N, dataset.row_ids_.data(), dataset.timestamps_.data(), insert_data.c_str());
+    auto insert_data = serialize(dataset.raw_);
+    auto res = Insert(segment, offset, N, dataset.row_ids_.data(), dataset.timestamps_.data(), insert_data.data(), insert_data.size());
     assert(res.error_code == Success);
 
     auto memory_usage_size = GetMemoryUsageInBytes(segment);
@@ -434,14 +582,12 @@ TEST(CApiTest, GetDeletedCountTest) {
     std::vector<int64_t> delete_row_ids = {100000, 100001, 100002};
     auto ids = std::make_unique<IdArray>();
     ids->mutable_int_id()->mutable_data()->Add(delete_row_ids.begin(), delete_row_ids.end());
-    std::string delete_data;
-    auto marshal = google::protobuf::TextFormat::PrintToString(*ids.get(), &delete_data);
-    assert(marshal == true);
+    auto delete_data = serialize(ids.get());
     uint64_t delete_timestamps[] = {0, 0, 0};
 
     auto offset = PreDelete(segment, 3);
 
-    auto del_res = Delete(segment, offset, 3, delete_data.c_str(), delete_timestamps);
+    auto del_res = Delete(segment, offset, 3, delete_data.data(), delete_data.size(), delete_timestamps);
     assert(del_res.error_code == Success);
 
     // TODO: assert(deleted_count == len(delete_row_ids))
@@ -463,10 +609,8 @@ TEST(CApiTest, GetRowCountTest) {
     int64_t offset;
     PreInsert(segment, N, &offset);
 
-    std::string insert_data;
-    auto marshal = google::protobuf::TextFormat::PrintToString(*dataset.raw_, &insert_data);
-    assert(marshal == true);
-    auto res = Insert(segment, offset, N, dataset.row_ids_.data(), dataset.timestamps_.data(), insert_data.c_str());
+    auto insert_data = serialize(dataset.raw_);
+    auto res = Insert(segment, offset, N, dataset.row_ids_.data(), dataset.timestamps_.data(), insert_data.data(), insert_data.size());
     assert(res.error_code == Success);
 
     auto row_count = GetRowCount(segment);
@@ -534,10 +678,8 @@ TEST(CApiTest, ReduceRemoveDuplicates) {
     int64_t offset;
     PreInsert(segment, N, &offset);
 
-    std::string insert_data;
-    auto marshal = google::protobuf::TextFormat::PrintToString(*dataset.raw_, &insert_data);
-    assert(marshal == true);
-    auto ins_res = Insert(segment, offset, N, dataset.row_ids_.data(), dataset.timestamps_.data(), insert_data.c_str());
+    auto insert_data = serialize(dataset.raw_);
+    auto ins_res = Insert(segment, offset, N, dataset.row_ids_.data(), dataset.timestamps_.data(), insert_data.data(), insert_data.size());
     assert(ins_res.error_code == Success);
 
     const char* dsl_string = R"(
@@ -631,10 +773,8 @@ testReduceSearchWithExpr(int N, int topK, int num_queries) {
     int64_t offset;
     PreInsert(segment, N, &offset);
 
-    std::string insert_data;
-    auto marshal = google::protobuf::TextFormat::PrintToString(*dataset.raw_, &insert_data);
-    assert(marshal == true);
-    auto ins_res = Insert(segment, offset, N, dataset.row_ids_.data(), dataset.timestamps_.data(), insert_data.c_str());
+    auto insert_data = serialize(dataset.raw_);
+    auto ins_res = Insert(segment, offset, N, dataset.row_ids_.data(), dataset.timestamps_.data(), insert_data.data(), insert_data.size());
     assert(ins_res.error_code == Success);
 
     auto fmt = boost::format(R"(vector_anns: <
@@ -824,10 +964,8 @@ TEST(CApiTest, Indexing_Without_Predicate) {
     int64_t offset;
     PreInsert(segment, N, &offset);
 
-    std::string insert_data;
-    auto marshal = google::protobuf::TextFormat::PrintToString(*dataset.raw_, &insert_data);
-    assert(marshal == true);
-    auto ins_res = Insert(segment, offset, N, dataset.row_ids_.data(), dataset.timestamps_.data(), insert_data.c_str());
+    auto insert_data = serialize(dataset.raw_);
+    auto ins_res = Insert(segment, offset, N, dataset.row_ids_.data(), dataset.timestamps_.data(), insert_data.data(), insert_data.size());
     assert(ins_res.error_code == Success);
 
     const char* dsl_string = R"(
@@ -951,10 +1089,8 @@ TEST(CApiTest, Indexing_Expr_Without_Predicate) {
     int64_t offset;
     PreInsert(segment, N, &offset);
 
-    std::string insert_data;
-    auto marshal = google::protobuf::TextFormat::PrintToString(*dataset.raw_, &insert_data);
-    assert(marshal == true);
-    auto ins_res = Insert(segment, offset, N, dataset.row_ids_.data(), dataset.timestamps_.data(), insert_data.c_str());
+    auto insert_data = serialize(dataset.raw_);
+    auto ins_res = Insert(segment, offset, N, dataset.row_ids_.data(), dataset.timestamps_.data(), insert_data.data(), insert_data.size());
     assert(ins_res.error_code == Success);
 
     const char* serialized_expr_plan = R"(vector_anns: <
@@ -1073,10 +1209,8 @@ TEST(CApiTest, Indexing_With_float_Predicate_Range) {
     int64_t offset;
     PreInsert(segment, N, &offset);
 
-    std::string insert_data;
-    auto marshal = google::protobuf::TextFormat::PrintToString(*dataset.raw_, &insert_data);
-    assert(marshal == true);
-    auto ins_res = Insert(segment, offset, N, dataset.row_ids_.data(), dataset.timestamps_.data(), insert_data.c_str());
+    auto insert_data = serialize(dataset.raw_);
+    auto ins_res = Insert(segment, offset, N, dataset.row_ids_.data(), dataset.timestamps_.data(), insert_data.data(), insert_data.size());
     assert(ins_res.error_code == Success);
 
     const char* dsl_string = R"({
@@ -1214,11 +1348,9 @@ TEST(CApiTest, Indexing_Expr_With_float_Predicate_Range) {
         int64_t offset;
         PreInsert(segment, N, &offset);
 
-        std::string insert_data;
-        auto marshal = google::protobuf::TextFormat::PrintToString(*dataset.raw_, &insert_data);
-        assert(marshal == true);
+        auto insert_data = serialize(dataset.raw_);
         auto ins_res =
-            Insert(segment, offset, N, dataset.row_ids_.data(), dataset.timestamps_.data(), insert_data.c_str());
+            Insert(segment, offset, N, dataset.row_ids_.data(), dataset.timestamps_.data(), insert_data.data(), insert_data.size());
         assert(ins_res.error_code == Success);
     }
 
@@ -1368,10 +1500,8 @@ TEST(CApiTest, Indexing_With_float_Predicate_Term) {
     int64_t offset;
     PreInsert(segment, N, &offset);
 
-    std::string insert_data;
-    auto marshal = google::protobuf::TextFormat::PrintToString(*dataset.raw_, &insert_data);
-    assert(marshal == true);
-    auto ins_res = Insert(segment, offset, N, dataset.row_ids_.data(), dataset.timestamps_.data(), insert_data.c_str());
+    auto insert_data = serialize(dataset.raw_);
+    auto ins_res = Insert(segment, offset, N, dataset.row_ids_.data(), dataset.timestamps_.data(), insert_data.data(), insert_data.size());
     assert(ins_res.error_code == Success);
 
     const char* dsl_string = R"({
@@ -1506,10 +1636,8 @@ TEST(CApiTest, Indexing_Expr_With_float_Predicate_Term) {
     int64_t offset;
     PreInsert(segment, N, &offset);
 
-    std::string insert_data;
-    auto marshal = google::protobuf::TextFormat::PrintToString(*dataset.raw_, &insert_data);
-    assert(marshal == true);
-    auto ins_res = Insert(segment, offset, N, dataset.row_ids_.data(), dataset.timestamps_.data(), insert_data.c_str());
+    auto insert_data = serialize(dataset.raw_);
+    auto ins_res = Insert(segment, offset, N, dataset.row_ids_.data(), dataset.timestamps_.data(), insert_data.data(), insert_data.size());
     assert(ins_res.error_code == Success);
 
     const char* serialized_expr_plan = R"(
@@ -1653,10 +1781,8 @@ TEST(CApiTest, Indexing_With_binary_Predicate_Range) {
     int64_t offset;
     PreInsert(segment, N, &offset);
 
-    std::string insert_data;
-    auto marshal = google::protobuf::TextFormat::PrintToString(*dataset.raw_, &insert_data);
-    assert(marshal == true);
-    auto ins_res = Insert(segment, offset, N, dataset.row_ids_.data(), dataset.timestamps_.data(), insert_data.c_str());
+    auto insert_data = serialize(dataset.raw_);
+    auto ins_res = Insert(segment, offset, N, dataset.row_ids_.data(), dataset.timestamps_.data(), insert_data.data(), insert_data.size());
     assert(ins_res.error_code == Success);
 
     const char* dsl_string = R"({
@@ -1793,10 +1919,8 @@ TEST(CApiTest, Indexing_Expr_With_binary_Predicate_Range) {
     int64_t offset;
     PreInsert(segment, N, &offset);
 
-    std::string insert_data;
-    auto marshal = google::protobuf::TextFormat::PrintToString(*dataset.raw_, &insert_data);
-    assert(marshal == true);
-    auto ins_res = Insert(segment, offset, N, dataset.row_ids_.data(), dataset.timestamps_.data(), insert_data.c_str());
+    auto insert_data = serialize(dataset.raw_);
+    auto ins_res = Insert(segment, offset, N, dataset.row_ids_.data(), dataset.timestamps_.data(), insert_data.data(), insert_data.size());
     assert(ins_res.error_code == Success);
 
     const char* serialized_expr_plan = R"(vector_anns: <
@@ -1946,10 +2070,8 @@ TEST(CApiTest, Indexing_With_binary_Predicate_Term) {
     int64_t offset;
     PreInsert(segment, N, &offset);
 
-    std::string insert_data;
-    auto marshal = google::protobuf::TextFormat::PrintToString(*dataset.raw_, &insert_data);
-    assert(marshal == true);
-    auto ins_res = Insert(segment, offset, N, dataset.row_ids_.data(), dataset.timestamps_.data(), insert_data.c_str());
+    auto insert_data = serialize(dataset.raw_);
+    auto ins_res = Insert(segment, offset, N, dataset.row_ids_.data(), dataset.timestamps_.data(), insert_data.data(), insert_data.size());
     assert(ins_res.error_code == Success);
 
     const char* dsl_string = R"({
@@ -2090,10 +2212,8 @@ TEST(CApiTest, Indexing_Expr_With_binary_Predicate_Term) {
     int64_t offset;
     PreInsert(segment, N, &offset);
 
-    std::string insert_data;
-    auto marshal = google::protobuf::TextFormat::PrintToString(*dataset.raw_, &insert_data);
-    assert(marshal == true);
-    auto ins_res = Insert(segment, offset, N, dataset.row_ids_.data(), dataset.timestamps_.data(), insert_data.c_str());
+    auto insert_data = serialize(dataset.raw_);
+    auto ins_res = Insert(segment, offset, N, dataset.row_ids_.data(), dataset.timestamps_.data(), insert_data.data(), insert_data.size());
     assert(ins_res.error_code == Success);
 
     const char* serialized_expr_plan = R"(vector_anns: <
@@ -2238,11 +2358,9 @@ TEST(CApiTest, SealedSegmentTest) {
     auto blob = (void*)(&ages[0]);
     FieldMeta field_meta(FieldName("age"), FieldId(101), DataType::INT64);
     auto array = CreateScalarDataArrayFrom(ages.data(), N, field_meta);
-    std::string age_data;
-    auto marshal = google::protobuf::TextFormat::PrintToString(*array.get(), &age_data);
-    assert(marshal == true);
+    auto age_data = serialize(array.get());
 
-    auto load_info = CLoadFieldDataInfo{101, age_data.c_str(), N};
+    auto load_info = CLoadFieldDataInfo{101, age_data.data(), age_data.size(), N};
 
     auto res = LoadFieldData(segment, load_info);
     assert(res.error_code == Success);
@@ -2269,21 +2387,15 @@ TEST(CApiTest, SealedSegment_search_float_Predicate_Range) {
     auto counter_col = dataset.get_col<int64_t>(FieldId(101));
     FieldMeta counter_field_meta(FieldName("counter"), FieldId(101), DataType::INT64);
     auto count_array = CreateScalarDataArrayFrom(counter_col.data(), N, counter_field_meta);
-    std::string counter_data;
-    auto marshal = google::protobuf::TextFormat::PrintToString(*count_array.get(), &counter_data);
-    assert(marshal == true);
+    auto counter_data = serialize(count_array.get());
 
     FieldMeta row_id_field_meta(FieldName("RowID"), RowFieldID, DataType::INT64);
     auto row_ids_array = CreateScalarDataArrayFrom(dataset.row_ids_.data(), N, row_id_field_meta);
-    std::string row_ids_data;
-    marshal = google::protobuf::TextFormat::PrintToString(*row_ids_array.get(), &row_ids_data);
-    assert(marshal == true);
+    auto row_ids_data = serialize(row_ids_array.get());
 
     FieldMeta timestamp_field_meta(FieldName("Timestamp"), TimestampFieldID, DataType::INT64);
     auto timestamps_array = CreateScalarDataArrayFrom(dataset.timestamps_.data(), N, timestamp_field_meta);
-    std::string timestamps_data;
-    marshal = google::protobuf::TextFormat::PrintToString(*timestamps_array.get(), &timestamps_data);
-    assert(marshal == true);
+    auto timestamps_data = serialize(timestamps_array.get());
 
     const char* dsl_string = R"({
         "bool": {
@@ -2380,7 +2492,8 @@ TEST(CApiTest, SealedSegment_search_float_Predicate_Range) {
 
     auto c_counter_field_data = CLoadFieldDataInfo{
         101,
-        counter_data.c_str(),
+        counter_data.data(),
+        counter_data.size(),
         N,
     };
     status = LoadFieldData(segment, c_counter_field_data);
@@ -2388,7 +2501,8 @@ TEST(CApiTest, SealedSegment_search_float_Predicate_Range) {
 
     auto c_id_field_data = CLoadFieldDataInfo{
         0,
-        row_ids_data.c_str(),
+        row_ids_data.data(),
+        row_ids_data.size(),
         N,
     };
     status = LoadFieldData(segment, c_id_field_data);
@@ -2396,7 +2510,8 @@ TEST(CApiTest, SealedSegment_search_float_Predicate_Range) {
 
     auto c_ts_field_data = CLoadFieldDataInfo{
         1,
-        timestamps_data.c_str(),
+        timestamps_data.data(),
+        timestamps_data.size(),
         N,
     };
     status = LoadFieldData(segment, c_ts_field_data);
@@ -2436,28 +2551,20 @@ TEST(CApiTest, SealedSegment_search_without_predicates) {
     auto query_ptr = vec_col.data() + 42000 * DIM;
 
     auto vec_array = dataset.get_col(FieldId(100));
-    std::string vec_data;
-    auto marshal = google::protobuf::TextFormat::PrintToString(*vec_array.get(), &vec_data);
-    assert(marshal == true);
+    auto vec_data = serialize(vec_array.get());
 
     auto counter_col = dataset.get_col<int64_t>(FieldId(101));
     FieldMeta counter_field_meta(FieldName("counter"), FieldId(101), DataType::INT64);
     auto count_array = CreateScalarDataArrayFrom(counter_col.data(), N, counter_field_meta);
-    std::string counter_data;
-    marshal = google::protobuf::TextFormat::PrintToString(*count_array.get(), &counter_data);
-    assert(marshal == true);
+    auto counter_data = serialize(count_array.get());
 
     FieldMeta row_id_field_meta(FieldName("RowID"), RowFieldID, DataType::INT64);
     auto row_ids_array = CreateScalarDataArrayFrom(dataset.row_ids_.data(), N, row_id_field_meta);
-    std::string row_ids_data;
-    marshal = google::protobuf::TextFormat::PrintToString(*row_ids_array.get(), &row_ids_data);
-    assert(marshal == true);
+    auto row_ids_data = serialize(row_ids_array.get());
 
     FieldMeta timestamp_field_meta(FieldName("Timestamp"), TimestampFieldID, DataType::INT64);
     auto timestamps_array = CreateScalarDataArrayFrom(dataset.timestamps_.data(), N, timestamp_field_meta);
-    std::string timestamps_data;
-    marshal = google::protobuf::TextFormat::PrintToString(*timestamps_array.get(), &timestamps_data);
-    assert(marshal == true);
+    auto timestamps_data = serialize(timestamps_array.get());
 
     const char* dsl_string = R"(
     {
@@ -2478,7 +2585,8 @@ TEST(CApiTest, SealedSegment_search_without_predicates) {
 
     auto c_vec_field_data = CLoadFieldDataInfo{
         100,
-        vec_data.c_str(),
+        vec_data.data(),
+        vec_data.size(),
         N,
     };
     auto status = LoadFieldData(segment, c_vec_field_data);
@@ -2486,7 +2594,8 @@ TEST(CApiTest, SealedSegment_search_without_predicates) {
 
     auto c_counter_field_data = CLoadFieldDataInfo{
         101,
-        counter_data.c_str(),
+        counter_data.data(),
+        counter_data.size(),
         N,
     };
     status = LoadFieldData(segment, c_counter_field_data);
@@ -2494,7 +2603,8 @@ TEST(CApiTest, SealedSegment_search_without_predicates) {
 
     auto c_id_field_data = CLoadFieldDataInfo{
         0,
-        row_ids_data.c_str(),
+        row_ids_data.data(),
+        row_ids_data.size(),
         N,
     };
     status = LoadFieldData(segment, c_id_field_data);
@@ -2502,7 +2612,8 @@ TEST(CApiTest, SealedSegment_search_without_predicates) {
 
     auto c_ts_field_data = CLoadFieldDataInfo{
         1,
-        timestamps_data.c_str(),
+        timestamps_data.data(),
+        timestamps_data.size(),
         N,
     };
     status = LoadFieldData(segment, c_ts_field_data);
@@ -2554,21 +2665,15 @@ TEST(CApiTest, SealedSegment_search_float_With_Expr_Predicate_Range) {
     auto counter_col = dataset.get_col<int64_t>(FieldId(101));
     FieldMeta counter_field_meta(FieldName("counter"), FieldId(101), DataType::INT64);
     auto count_array = CreateScalarDataArrayFrom(counter_col.data(), N, counter_field_meta);
-    std::string counter_data;
-    auto marshal = google::protobuf::TextFormat::PrintToString(*count_array.get(), &counter_data);
-    assert(marshal == true);
+    auto counter_data = serialize(count_array.get());
 
     FieldMeta row_id_field_meta(FieldName("RowID"), RowFieldID, DataType::INT64);
     auto row_ids_array = CreateScalarDataArrayFrom(dataset.row_ids_.data(), N, row_id_field_meta);
-    std::string row_ids_data;
-    marshal = google::protobuf::TextFormat::PrintToString(*row_ids_array.get(), &row_ids_data);
-    assert(marshal == true);
+    auto row_ids_data = serialize(row_ids_array.get());
 
     FieldMeta timestamp_field_meta(FieldName("Timestamp"), TimestampFieldID, DataType::INT64);
     auto timestamps_array = CreateScalarDataArrayFrom(dataset.timestamps_.data(), N, timestamp_field_meta);
-    std::string timestamps_data;
-    marshal = google::protobuf::TextFormat::PrintToString(*timestamps_array.get(), &timestamps_data);
-    assert(marshal == true);
+    auto timestamps_data = serialize(timestamps_array.get());
 
     const char* serialized_expr_plan = R"(vector_anns: <
                                             field_id: 100
@@ -2678,7 +2783,8 @@ TEST(CApiTest, SealedSegment_search_float_With_Expr_Predicate_Range) {
 
     auto c_counter_field_data = CLoadFieldDataInfo{
         101,
-        counter_data.c_str(),
+        counter_data.data(),
+        counter_data.size(),
         N,
     };
     status = LoadFieldData(segment, c_counter_field_data);
@@ -2686,7 +2792,8 @@ TEST(CApiTest, SealedSegment_search_float_With_Expr_Predicate_Range) {
 
     auto c_id_field_data = CLoadFieldDataInfo{
         0,
-        row_ids_data.c_str(),
+        row_ids_data.data(),
+        row_ids_data.size(),
         N,
     };
     status = LoadFieldData(segment, c_id_field_data);
@@ -2694,7 +2801,8 @@ TEST(CApiTest, SealedSegment_search_float_With_Expr_Predicate_Range) {
 
     auto c_ts_field_data = CLoadFieldDataInfo{
         1,
-        timestamps_data.c_str(),
+        timestamps_data.data(),
+        timestamps_data.size(),
         N,
     };
     status = LoadFieldData(segment, c_ts_field_data);
@@ -2736,3 +2844,4 @@ TEST(CApiTest, SealedSegment_search_float_With_Expr_Predicate_Range) {
     DeleteCollection(collection);
     DeleteSegment(segment);
 }
+
