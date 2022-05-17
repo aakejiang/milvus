@@ -1,8 +1,7 @@
 package table
 
 import (
-	"github.com/milvus-io/milvus/internal/proto/commonpb"
-	"github.com/milvus-io/milvus/internal/util/typeutil"
+	"time"
 )
 
 type SegmentIndex struct {
@@ -14,14 +13,12 @@ type SegmentIndex struct {
 	// FieldIndexInfo (FieldID & IndexID)
 	FieldID int64 `db:"field_id"`
 	// IndexInfo (IndexID & IndexName & IndexParams)
-	IndexID     int64                    `db:"index_id"`
-	IndexName   string                   `db:"index_name"`
-	IndexParams []*commonpb.KeyValuePair `db:"index_params"`
-	//EnableIndex    bool                     `db:"enable_index"`
-	BuildID        int64              `db:"build_id"`
-	IndexFilePaths []string           `db:"index_file_paths"`
-	IndexSize      uint64             `db:"index_size"`
-	IsDeleted      bool               `db:"is_deleted"`
-	CreatedAt      typeutil.Timestamp `db:"created_at"`
-	UpdatedAt      typeutil.Timestamp `db:"updated_at"`
+	IndexID        int64     `db:"index_id"`
+	BuildID        int64     `db:"build_id"`
+	EnableIndex    bool      `db:"enable_index"`
+	IndexFilePaths []string  `db:"index_file_paths"`
+	IndexSize      uint64    `db:"index_size"`
+	IsDeleted      bool      `db:"is_deleted"`
+	CreatedAt      time.Time `db:"created_at"`
+	UpdatedAt      time.Time `db:"updated_at"`
 }

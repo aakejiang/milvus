@@ -34,7 +34,7 @@ type Connector struct {
 // Open creates connections to a database
 func Open(cfg *paramtable.DBConfig) (*sqlx.DB, error) {
 	// load config
-	dataSourceName := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s", cfg.Username, cfg.Password, cfg.Address, cfg.Port, cfg.DBName)
+	dataSourceName := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?parseTime=true", cfg.Username, cfg.Password, cfg.Address, cfg.Port, cfg.DBName)
 	db, err := sqlx.Open(cfg.DriverName, dataSourceName)
 	if err != nil {
 		log.Error("Fail to connect dataSource:[%v] Err:[%v]", zap.String("dataSource", dataSourceName), zap.Error(err))

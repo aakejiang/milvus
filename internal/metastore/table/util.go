@@ -10,16 +10,26 @@ import (
 	"go.uber.org/zap"
 )
 
+func ConvertToCollectionProperties(collection *model.Collection) *CollProperties {
+	return &CollProperties{
+		VirtualChannelNames:  collection.VirtualChannelNames,
+		PhysicalChannelNames: collection.PhysicalChannelNames,
+		ShardsNum:            collection.ShardsNum,
+		StartPositions:       collection.StartPositions,
+		ConsistencyLevel:     collection.ConsistencyLevel,
+	}
+}
+
 // model <---> db
 
-func ConvertCollectionDBToModel(coll *Collection, partition *Partition, field *Field, index *SegmentIndex) *model.Collection {
+func ConvertCollectionDBToModel(coll *Collection, partition *Partition, field *Field, index *Index) *model.Collection {
 	var aliases []string
-	err := json.Unmarshal([]byte(coll.CollectionAlias), aliases)
+	err := json.Unmarshal([]byte(coll.CollectionAlias.String), aliases)
 	if err != nil {
 		log.Error("unmarshal collection alias failed", zap.Error(err))
 	}
 	properties := CollProperties{}
-	err = json.Unmarshal([]byte(coll.Properties), properties)
+	err = json.Unmarshal([]byte(coll.Properties.String), properties)
 	if err != nil {
 		log.Error("unmarshal collection properties error", zap.Error(err))
 	}
@@ -32,7 +42,7 @@ func ConvertCollectionDBToModel(coll *Collection, partition *Partition, field *F
 	return &model.Collection{
 		CollectionID:         coll.CollectionID,
 		Name:                 coll.CollectionName,
-		Description:          coll.Description,
+		Description:          coll.Description.String,
 		AutoID:               coll.AutoID,
 		Fields:               retFields,
 		Partitions:           retPartitions,
@@ -42,7 +52,7 @@ func ConvertCollectionDBToModel(coll *Collection, partition *Partition, field *F
 		ShardsNum:            properties.ShardsNum,
 		StartPositions:       properties.StartPositions,
 		ConsistencyLevel:     properties.ConsistencyLevel,
-		CreateTime:           coll.CreatedAt,
+		CreateTime:           uint64(coll.CreatedAt.Unix()),
 		Aliases:              aliases,
 	}
 }
@@ -77,20 +87,20 @@ func ConvertCollectionsToNameMap(colls []*model.Collection) map[string]*model.Co
 
 func ConvertFieldDBToModel(field *Field) *model.Field {
 	var typeParams []*commonpb.KeyValuePair
-	err := json.Unmarshal([]byte(field.TypeParams), typeParams)
+	err := json.Unmarshal([]byte(*field.TypeParams), typeParams)
 	if err != nil {
 		log.Error("unmarshal TypeParams of field failed", zap.Error(err))
 	}
 	var indexParams []*commonpb.KeyValuePair
-	err = json.Unmarshal([]byte(field.IndexParams), indexParams)
+	err = json.Unmarshal([]byte(*field.IndexParams), indexParams)
 	if err != nil {
 		log.Error("unmarshal IndexParams of field failed", zap.Error(err))
 	}
 	return &model.Field{
-		FieldID:      field.FieldID,
-		Name:         field.FieldName,
+		FieldID:      *field.FieldID,
+		Name:         *field.FieldName,
 		IsPrimaryKey: field.IsPrimaryKey,
-		Description:  field.Description,
+		Description:  *field.Description,
 		DataType:     field.DataType,
 		TypeParams:   typeParams,
 		IndexParams:  indexParams,
@@ -109,9 +119,9 @@ func BatchConvertFieldDBToModel(fields []*Field) []*model.Field {
 
 func ConvertPartitionDBToModel(partiton *Partition) *model.Partition {
 	return &model.Partition{
-		PartitionID:               partiton.PartitionID,
-		PartitionName:             partiton.PartitionName,
-		PartitionCreatedTimestamp: partiton.PartitionCreatedTimestamp,
+		PartitionID:               *partiton.PartitionID,
+		PartitionName:             *partiton.PartitionName,
+		PartitionCreatedTimestamp: *partiton.PartitionCreatedTimestamp,
 	}
 }
 
@@ -126,10 +136,10 @@ func BatchConvertPartitionDBToModel(partitons []*Partition) []*model.Partition {
 
 func ConvertIndexDBToModel(index *Index) *model.Index {
 	return &model.Index{
-		CollectionID: index.CollectionID,
-		FieldID:      index.FieldID,
-		IndexID:      index.IndexID,
-		IndexName:    index.IndexName,
+		CollectionID: *index.CollectionID,
+		FieldID:      *index.FieldID,
+		IndexID:      *index.IndexID,
+		IndexName:    *index.IndexName,
 		IndexParams:  index.IndexParams,
 	}
 }
@@ -143,12 +153,12 @@ func BatchConvertIndexDBToModel(indexes []*Index) []*model.Index {
 	return result
 }
 
-func ConvertSegmentIndexDBToIndexModel(fieldIndex *SegmentIndex) *model.Index {
+func ConvertSegmentIndexDBToIndexModel(fieldIndex *Index) *model.Index {
 	return &model.Index{
-		CollectionID: fieldIndex.CollectionID,
-		FieldID:      fieldIndex.FieldID,
-		IndexID:      fieldIndex.IndexID,
-		IndexName:    fieldIndex.IndexName,
+		CollectionID: *fieldIndex.CollectionID,
+		FieldID:      *fieldIndex.FieldID,
+		IndexID:      *fieldIndex.IndexID,
+		IndexName:    *fieldIndex.IndexName,
 		IndexParams:  fieldIndex.IndexParams,
 	}
 }
