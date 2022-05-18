@@ -918,7 +918,7 @@ func (c *Core) BuildIndex(ctx context.Context, segID typeutil.UniqueID, field *m
 	sp, ctx := trace.StartSpanFromContext(ctx)
 	defer sp.Finish()
 	if c.MetaTable.IsSegmentIndexed(segID, field, idxInfo.IndexParams) {
-		info, err := c.MetaTable.GetSegmentIndexInfoByID(segID, field.FieldID, idxInfo.GetIndexName())
+		info, err := c.MetaTable.GetSegmentIndexInfoByID(segID, field.FieldID, idxInfo.IndexName)
 		return info.BuildID, err
 	}
 	rows, err := c.CallGetNumRowsService(ctx, segID, isFlush)

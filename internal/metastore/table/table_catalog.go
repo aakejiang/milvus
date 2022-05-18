@@ -39,14 +39,19 @@ func (tc *TableCatalog) CreateCollection(ctx context.Context, collection *model.
 	}()
 
 	// sql 1
-	sqlStr1 := "insert into collections(tenant_id, collection_id, collection_name, description, auto_id, ts, properties) values (?,?,?,?,?,?,?)"
+	sqlStr1 := "insert into collections(tenant_id, collection_id, collection_name, collection_alias, description, auto_id, ts, properties) values (?,?,?,?,?,?,?)"
+	aliasesStr, err := json.Marshal(collection.Aliases)
+	if err != nil {
+		log.Error("marshal alias failed", zap.Error(err))
+		return err
+	}
 	properties := ConvertToCollectionProperties(collection)
 	propertiesStr, err := json.Marshal(properties)
 	if err != nil {
 		log.Error("marshal collection properties error", zap.Error(err))
 		return err
 	}
-	_, err = tx.Exec(sqlStr1, collection.TenantID, collection.CollectionID, collection.Name, collection.Description, collection.AutoID, ts, propertiesStr)
+	_, err = tx.Exec(sqlStr1, collection.TenantID, collection.CollectionID, collection.Name, aliasesStr, collection.Description, collection.AutoID, ts, propertiesStr)
 	if err != nil {
 		log.Error("insert collection failed", zap.Error(err))
 		return err
@@ -590,7 +595,7 @@ func (tc *TableCatalog) ListAliases(ctx context.Context) ([]*model.Collection, e
 	var collAlias []*model.Collection
 	for _, coll := range colls {
 		var aliases []string
-		err = json.Unmarshal([]byte(coll.CollectionAlias.String), aliases)
+		err = json.Unmarshal([]byte(*coll.CollectionAlias), aliases)
 		if err != nil {
 			log.Error("unmarshal collection alias failed", zap.Error(err))
 			continue

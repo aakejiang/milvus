@@ -3,10 +3,12 @@ package table
 import (
 	"context"
 	"database/sql/driver"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	_ "github.com/go-sql-driver/mysql"
@@ -20,6 +22,7 @@ import (
 )
 
 const (
+	tenantID        = "tenant1"
 	collName        = "testColl"
 	collNameInvalid = "testColl_invalid"
 	aliasName1      = "alias1"
@@ -34,6 +37,7 @@ const (
 	segID           = typeutil.UniqueID(100)
 	segID2          = typeutil.UniqueID(101)
 	fieldID         = typeutil.UniqueID(110)
+	fieldName       = "field_110"
 	fieldID2        = typeutil.UniqueID(111)
 	indexID         = typeutil.UniqueID(10000)
 	indexID2        = typeutil.UniqueID(10001)
@@ -167,7 +171,7 @@ func TestCreateCollection_RollbackOnFailure(t *testing.T) {
 	}
 }
 
-func TestReadOrangeProcess(t *testing.T) {
+func TestGetCollectionByID(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("failed to open sqlmock database: %s", err)
@@ -189,9 +193,16 @@ func TestReadOrangeProcess(t *testing.T) {
 	}
 
 	// mock select normal
+	aliasesStr, _ := json.Marshal([]string{"a", "b"})
+	collTimestamp := 433286016553713676
+	var partCreatedTimestamp uint64 = 433286016527499280
 	rows := sqlmock.NewRows(
-		[]string{"collection_id", "collection_name", "auto_id", "properties", "collection_alias"},
-	).AddRow([]driver.Value{collID, collName, false, "{}", ""}...)
+		[]string{"id", "tenant_id", "collection_id", "collection_name", "collection_alias", "description", "auto_id", "ts", "properties", "is_deleted",
+			"id", "partition_id", "partition_name", "partition_created_timestamp", "collection_id", "ts", "is_deleted", "created_at", "updated_at",
+			"id", "field_id", "field_name"},
+	).AddRow([]driver.Value{1, tenantID, collID, collName, string(aliasesStr), "", false, collTimestamp, "{}", false,
+		10, partID, partName, partCreatedTimestamp, collID, 433286016461963275, false, time.Now(), time.Now(),
+		1000, fieldID, fieldName}...)
 	mock.ExpectQuery(sqlSelectSql).WillReturnRows(rows)
 	res, err := tc.GetCollectionByID(context.TODO(), collID, ts)
 	if err != nil {
@@ -207,10 +218,19 @@ func TestReadOrangeProcess(t *testing.T) {
 	if res.AutoID != false {
 		t.Fatalf("unexpected auto_id:%t", res.AutoID)
 	}
-	if res.ShardsNum != 2 {
-		t.Fatalf("unexpected shards_num:%d", res.ShardsNum)
+	for _, val := range res.Aliases {
+		if val != "a" && val != "b" {
+			t.Fatalf("unexpected collection_alias:%s", res.Aliases)
+		}
 	}
-	if res.Aliases != nil {
-		t.Fatalf("unexpected collection_alias:%s", res.Aliases)
+	for _, pt := range res.Partitions {
+		if pt.PartitionID != partID && pt.PartitionName != partName && pt.PartitionCreatedTimestamp != partCreatedTimestamp {
+			t.Fatalf("unexpected collection partitions")
+		}
+	}
+	for _, field := range res.Fields {
+		if field.FieldID != fieldID && field.Name != fieldName {
+			t.Fatalf("unexpected collection fields")
+		}
 	}
 }

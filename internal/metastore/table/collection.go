@@ -1,7 +1,6 @@
 package table
 
 import (
-	"database/sql"
 	"time"
 
 	"github.com/milvus-io/milvus/internal/proto/commonpb"
@@ -10,14 +9,14 @@ import (
 
 type Collection struct {
 	Id              int64              `db:"id"`
-	TenantID        sql.NullString     `db:"tenant_id"`
+	TenantID        *string            `db:"tenant_id"`
 	CollectionID    int64              `db:"collection_id"`
 	CollectionName  string             `db:"collection_name"`
-	CollectionAlias sql.NullString     `db:"collection_alias"`
-	Description     sql.NullString     `db:"description"`
+	CollectionAlias *string            `db:"collection_alias"`
+	Description     *string            `db:"description"`
 	AutoID          bool               `db:"auto_id"`
 	Ts              typeutil.Timestamp `db:"ts"`
-	Properties      sql.NullString     `db:"properties"`
+	Properties      *string            `db:"properties"`
 	IsDeleted       bool               `db:"is_deleted"`
 	CreatedAt       time.Time          `db:"created_at"`
 	UpdatedAt       time.Time          `db:"updated_at"`
