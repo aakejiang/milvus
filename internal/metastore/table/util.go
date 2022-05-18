@@ -157,12 +157,19 @@ func BatchConvertPartitionDBToModel(partitons []*Partition) []*model.Partition {
 }
 
 func ConvertIndexDBToModel(index *Index) *model.Index {
+	var indexParams []*commonpb.KeyValuePair
+	if index.IndexParams != nil {
+		err := json.Unmarshal([]byte(*index.IndexParams), indexParams)
+		if err != nil {
+			log.Error("unmarshal IndexParams of index failed", zap.Error(err))
+		}
+	}
 	return &model.Index{
 		CollectionID: *index.CollectionID,
 		FieldID:      *index.FieldID,
 		IndexID:      *index.IndexID,
 		IndexName:    *index.IndexName,
-		IndexParams:  index.IndexParams,
+		IndexParams:  indexParams,
 	}
 }
 
@@ -179,12 +186,19 @@ func ConvertSegmentIndexDBToIndexModel(fieldIndex *Index) *model.Index {
 	if fieldIndex.IndexID == nil {
 		return nil
 	}
+	var indexParams []*commonpb.KeyValuePair
+	if fieldIndex.IndexParams != nil {
+		err := json.Unmarshal([]byte(*fieldIndex.IndexParams), indexParams)
+		if err != nil {
+			log.Error("unmarshal IndexParams of field failed", zap.Error(err))
+		}
+	}
 	return &model.Index{
 		CollectionID: *fieldIndex.CollectionID,
 		FieldID:      *fieldIndex.FieldID,
 		IndexID:      *fieldIndex.IndexID,
 		IndexName:    *fieldIndex.IndexName,
-		IndexParams:  fieldIndex.IndexParams,
+		IndexParams:  indexParams,
 	}
 }
 

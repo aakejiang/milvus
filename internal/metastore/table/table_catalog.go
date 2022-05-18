@@ -40,13 +40,15 @@ func (tc *TableCatalog) CreateCollection(ctx context.Context, collection *model.
 
 	// sql 1
 	sqlStr1 := "insert into collections(tenant_id, collection_id, collection_name, collection_alias, description, auto_id, ts, properties) values (?,?,?,?,?,?,?)"
-	aliasesStr, err := json.Marshal(collection.Aliases)
+	aliasesBytes, err := json.Marshal(collection.Aliases)
+	aliasesStr := string(aliasesBytes)
 	if err != nil {
 		log.Error("marshal alias failed", zap.Error(err))
 		return err
 	}
 	properties := ConvertToCollectionProperties(collection)
-	propertiesStr, err := json.Marshal(properties)
+	propertiesBytes, err := json.Marshal(properties)
+	propertiesStr := string(propertiesBytes)
 	if err != nil {
 		log.Error("marshal collection properties error", zap.Error(err))
 		return err
@@ -61,18 +63,18 @@ func (tc *TableCatalog) CreateCollection(ctx context.Context, collection *model.
 	sqlStr2 := "insert into field_schemas(field_id, field_name, is_primary_key, description, data_type, type_params, index_params, auto_id, collection_id, ts) values (:field_id, :field_name, :is_primary_key, :description, :data_type, :type_params, :index_params, :auto_id, :collection_id, :ts)"
 	var fields []Field
 	for _, field := range collection.Fields {
-		typeParams, err := json.Marshal(field.TypeParams)
+		typeParamsBytes, err := json.Marshal(field.TypeParams)
 		if err != nil {
 			log.Error("marshal TypeParams of field failed", zap.Error(err))
 			continue
 		}
-		indexParams, err := json.Marshal(field.IndexParams)
+		typeParamsStr := string(typeParamsBytes)
+		indexParamsBytes, err := json.Marshal(field.IndexParams)
 		if err != nil {
 			log.Error("marshal IndexParams of field failed", zap.Error(err))
 			continue
 		}
-		typeParamsStr := string(typeParams)
-		indexParamsStr := string(indexParams)
+		indexParamsStr := string(indexParamsBytes)
 		f := Field{
 			FieldID:      &field.FieldID,
 			FieldName:    &field.Name,
@@ -167,7 +169,7 @@ func (tc *TableCatalog) GetCollectionByID(ctx context.Context, collectionID type
 func (tc *TableCatalog) GetCollectionIDByName(ctx context.Context, collectionName string, ts typeutil.Timestamp) (typeutil.UniqueID, error) {
 	sqlStr := "select collection_id from collections where is_deleted=false and collection_name=? and ts=?"
 	var collID typeutil.UniqueID
-	err := tc.DB.Get(collID, sqlStr, collectionName, ts)
+	err := tc.DB.Get(&collID, sqlStr, collectionName, ts)
 	if err != nil {
 		log.Error("get collection id by name failed", zap.String("collName", collectionName), zap.Uint64("ts", ts), zap.Error(err))
 		return 0, err
@@ -383,7 +385,7 @@ func (tc *TableCatalog) DropPartition(ctx context.Context, collection *model.Col
 		return err
 	}
 	if n != 1 {
-		return errors.New("execute delete partition sql failed")
+		return errors.New("RowsAffected is not 1")
 	}
 
 	return nil
@@ -409,12 +411,17 @@ func (tc *TableCatalog) CreateIndex(ctx context.Context, index *model.SegmentInd
 
 	// sql 1
 	sqlStr1 := "insert into indexes(collection_id, field_id, index_id, index_name, index_params) values (:collection_id, :field_id, :index_id, :index_name, :index_params)"
+	indexParamsBytes, err := json.Marshal(index.IndexParams)
+	if err != nil {
+		log.Error("marshal IndexParams of field failed", zap.Error(err))
+	}
+	indexParamsStr := string(indexParamsBytes)
 	idx := Index{
 		FieldID:      &index.FieldID,
 		CollectionID: &index.CollectionID,
 		IndexID:      &index.IndexID,
 		IndexName:    &index.IndexName,
-		IndexParams:  index.IndexParams,
+		IndexParams:  &indexParamsStr,
 	}
 	_, err = tx.NamedExec(sqlStr1, idx)
 	if err != nil {
@@ -423,7 +430,13 @@ func (tc *TableCatalog) CreateIndex(ctx context.Context, index *model.SegmentInd
 	}
 
 	// sql 2
-	sqlStr2 := "insert into segment_indexes(field_id, index_id, index_name, build_id, index_params, index_file_paths, index_size, collection_id) values (:field_id, :index_id, :index_name, :build_id, :index_params, :index_file_paths, :index_size, :collection_id)"
+	sqlStr2 := "insert into segment_indexes(collection_id, partition_id, segment_id, field_id, index_id, build_id, enable_index, index_file_paths, index_size) values (:collection_id, :partition_id, :segment_id, :field_id, :index_id, :build_id, :enable_index, :index_file_paths, :index_size)"
+	indexFilePaths, err := json.Marshal(index.IndexFilePaths)
+	if err != nil {
+		log.Error("marshal alias failed", zap.Error(err))
+		return err
+	}
+	indexFilePathsStr := string(indexFilePaths)
 	fi := SegmentIndex{
 		CollectionID:   index.CollectionID,
 		PartitionID:    index.PartitionID,
@@ -432,7 +445,7 @@ func (tc *TableCatalog) CreateIndex(ctx context.Context, index *model.SegmentInd
 		IndexID:        index.IndexID,
 		BuildID:        index.BuildID,
 		EnableIndex:    index.EnableIndex,
-		IndexFilePaths: index.IndexFilePaths,
+		IndexFilePaths: indexFilePathsStr,
 		IndexSize:      index.IndexSize,
 	}
 	_, err = tx.NamedExec(sqlStr2, fi)
@@ -517,15 +530,16 @@ func (tc *TableCatalog) CreateAlias(ctx context.Context, collection *model.Colle
 	}
 	presentAlias := coll.Aliases
 	newAlias := collection.Aliases
-	allAlias := metastore.ConvertInterfaceSlice(typeutil.SliceRemoveDuplicate(append(presentAlias, newAlias...)))
-	allAliasStr, err := json.Marshal(allAlias)
+	aliasSlice := metastore.ConvertInterfaceSlice(typeutil.SliceRemoveDuplicate(append(presentAlias, newAlias...)))
+	aliasesBytes, err := json.Marshal(aliasSlice)
+	aliasesStr := string(aliasesBytes)
 	if err != nil {
 		log.Error("marshal alias failed", zap.Error(err))
 		return err
 	}
 	// sql 1
 	sqlStr1 := "update collections set collection_alias=? where collection_id=? and ts=?"
-	rs, err := tc.DB.Exec(sqlStr1, allAliasStr, collection.CollectionID, ts)
+	rs, err := tc.DB.Exec(sqlStr1, aliasesStr, collection.CollectionID, ts)
 	if err != nil {
 		log.Error("add alias failed", zap.Error(err))
 		return err
@@ -554,14 +568,15 @@ func (tc *TableCatalog) DropAlias(ctx context.Context, collectionID typeutil.Uni
 			presentAlias = append(presentAlias[:i], presentAlias[i+1:]...)
 		}
 	}
-	aliasStr, err := json.Marshal(presentAlias)
+	aliasesBytes, err := json.Marshal(presentAlias)
+	aliasesStr := string(aliasesBytes)
 	if err != nil {
 		log.Error("marshal alias failed", zap.Error(err))
 		return err
 	}
 	// sql 1
 	sqlStr1 := "update collections set collection_alias=? where collection_id=? and ts=?"
-	rs, err := tc.DB.Exec(sqlStr1, aliasStr, collectionID, ts)
+	rs, err := tc.DB.Exec(sqlStr1, aliasesStr, collectionID, ts)
 	if err != nil {
 		log.Error("drop alias failed", zap.Error(err))
 		return err

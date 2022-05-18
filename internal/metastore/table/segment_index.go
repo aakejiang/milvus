@@ -16,7 +16,7 @@ type SegmentIndex struct {
 	IndexID        int64     `db:"index_id"`
 	BuildID        int64     `db:"build_id"`
 	EnableIndex    bool      `db:"enable_index"`
-	IndexFilePaths []string  `db:"index_file_paths"`
+	IndexFilePaths string    `db:"index_file_paths"`
 	IndexSize      uint64    `db:"index_size"`
 	IsDeleted      bool      `db:"is_deleted"`
 	CreatedAt      time.Time `db:"created_at"`
