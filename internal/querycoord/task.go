@@ -2068,9 +2068,7 @@ func (lbt *loadBalanceTask) execute(ctx context.Context) error {
 			log.Info("loadBalanceTask: add a childTask", zap.Int32("task type", int32(internalTask.msgType())), zap.Any("task", internalTask))
 		}
 		log.Info("loadBalanceTask: assign child task done", zap.Int64s("sourceNodeIDs", lbt.SourceNodeIDs))
-	}
-
-	if lbt.triggerCondition == querypb.TriggerCondition_LoadBalance {
+	} else if lbt.triggerCondition == querypb.TriggerCondition_LoadBalance {
 		if err := lbt.checkForManualLoadBalance(); err != nil {
 			lbt.setResultInfo(err)
 			return err
@@ -2084,7 +2082,6 @@ func (lbt *loadBalanceTask) execute(ctx context.Context) error {
 
 		balancedSegmentInfos := make(map[UniqueID]*querypb.SegmentInfo)
 		balancedSegmentIDs := make([]UniqueID, 0)
-
 		for _, nodeID := range lbt.SourceNodeIDs {
 			nodeExist := lbt.cluster.hasNode(nodeID)
 			if !nodeExist {
@@ -2159,20 +2156,18 @@ func (lbt *loadBalanceTask) execute(ctx context.Context) error {
 						continue
 					}
 
-					for _, replica := range segmentInfo.ReplicaIds {
-						segmentBingLog := segmentID2Binlog[segmentID]
-						segmentLoadInfo := lbt.broker.generateSegmentLoadInfo(ctx, collectionID, partitionID, segmentBingLog, true, collectionInfo.Schema)
-						msgBase := proto.Clone(lbt.Base).(*commonpb.MsgBase)
-						msgBase.MsgType = commonpb.MsgType_LoadSegments
-						loadSegmentReq := &querypb.LoadSegmentsRequest{
-							Base:         msgBase,
-							Infos:        []*querypb.SegmentLoadInfo{segmentLoadInfo},
-							Schema:       collectionInfo.Schema,
-							CollectionID: collectionID,
-							ReplicaID:    replica,
-						}
-						loadSegmentReqs = append(loadSegmentReqs, loadSegmentReq)
+					segmentBingLog := segmentID2Binlog[segmentID]
+					segmentLoadInfo := lbt.broker.generateSegmentLoadInfo(ctx, collectionID, partitionID, segmentBingLog, true, collectionInfo.Schema)
+					msgBase := proto.Clone(lbt.Base).(*commonpb.MsgBase)
+					msgBase.MsgType = commonpb.MsgType_LoadSegments
+					loadSegmentReq := &querypb.LoadSegmentsRequest{
+						Base:         msgBase,
+						Infos:        []*querypb.SegmentLoadInfo{segmentLoadInfo},
+						Schema:       collectionInfo.Schema,
+						CollectionID: collectionID,
+						ReplicaID:    lbt.replicaID,
 					}
+					loadSegmentReqs = append(loadSegmentReqs, loadSegmentReq)
 				}
 
 				for _, info := range dmChannelInfos {
@@ -2257,34 +2252,40 @@ func (lbt *loadBalanceTask) postExecute(context.Context) error {
 
 func (lbt *loadBalanceTask) globalPostExecute(ctx context.Context) error {
 	if len(lbt.getChildTask()) > 0 {
+		replicas := make(map[UniqueID]*milvuspb.ReplicaInfo)
+		segments := make(map[UniqueID]*querypb.SegmentInfo)
+
+		for _, id := range lbt.SourceNodeIDs {
+			for _, segment := range lbt.meta.getSegmentInfosByNode(id) {
+				segments[segment.SegmentID] = segment
+			}
+
+			nodeReplicas, err := lbt.meta.getReplicasByNodeID(id)
+			if err != nil {
+				log.Warn("failed to get replicas for removing offline querynode from it",
+					zap.Int64("querynodeID", id),
+					zap.Error(err))
+
+				continue
+			}
+			for _, replica := range nodeReplicas {
+				replicas[replica.ReplicaID] = replica
+			}
+		}
+
+		log.Debug("removing offline nodes from replicas and segments...",
+			zap.Int("len(replicas)", len(replicas)),
+			zap.Int("len(segments)", len(segments)),
+			zap.Int64("trigger task ID", lbt.getTaskID()),
+		)
+		wg := sync.WaitGroup{}
+		// Remove offline nodes from replica
 		if lbt.triggerCondition == querypb.TriggerCondition_NodeDown {
 			offlineNodes := make(typeutil.UniqueSet, len(lbt.SourceNodeIDs))
 			for _, nodeID := range lbt.SourceNodeIDs {
 				offlineNodes.Insert(nodeID)
 			}
-			replicas := make(map[UniqueID]*milvuspb.ReplicaInfo)
-			segments := make(map[UniqueID]*querypb.SegmentInfo)
 
-			for _, id := range lbt.SourceNodeIDs {
-				for _, segment := range lbt.meta.getSegmentInfosByNode(id) {
-					segments[segment.SegmentID] = segment
-				}
-
-				nodeReplicas, err := lbt.meta.getReplicasByNodeID(id)
-				if err != nil {
-					log.Warn("failed to get replicas for removing offline querynode from it",
-						zap.Int64("querynodeID", id),
-						zap.Error(err))
-				}
-				for _, replica := range nodeReplicas {
-					replicas[replica.ReplicaID] = replica
-				}
-			}
-
-			log.Debug("removing offline nodes from replicas and segments...",
-				zap.Int("len(replicas)", len(replicas)),
-				zap.Int("len(segments)", len(segments)))
-			wg := sync.WaitGroup{}
 			for _, replica := range replicas {
 				wg.Add(1)
 				go func(replica *milvuspb.ReplicaInfo) {
@@ -2306,28 +2307,30 @@ func (lbt *loadBalanceTask) globalPostExecute(ctx context.Context) error {
 					}
 				}(replica)
 			}
-
-			for _, segment := range segments {
-				wg.Add(1)
-				go func(segment *querypb.SegmentInfo) {
-					defer wg.Done()
-
-					segment.NodeID = -1
-					segment.NodeIds = removeFromSlice(segment.NodeIds, lbt.SourceNodeIDs...)
-					if len(segment.NodeIds) > 0 {
-						segment.NodeID = segment.NodeIds[0]
-					}
-
-					err := lbt.meta.saveSegmentInfo(segment)
-					if err != nil {
-						log.Warn("failed to remove offline nodes from segment info",
-							zap.Int64("segmentID", segment.SegmentID),
-							zap.Error(err))
-					}
-				}(segment)
-			}
-			wg.Wait()
 		}
+
+		// Update the nodes list of segment, only remove the source nodes,
+		// adding destination nodes will be executed by updateSegmentInfoFromTask()
+		for _, segment := range segments {
+			wg.Add(1)
+			go func(segment *querypb.SegmentInfo) {
+				defer wg.Done()
+
+				segment.NodeID = -1
+				segment.NodeIds = removeFromSlice(segment.NodeIds, lbt.SourceNodeIDs...)
+				if len(segment.NodeIds) > 0 {
+					segment.NodeID = segment.NodeIds[0]
+				}
+
+				err := lbt.meta.saveSegmentInfo(segment)
+				if err != nil {
+					log.Warn("failed to remove offline nodes from segment info",
+						zap.Int64("segmentID", segment.SegmentID),
+						zap.Error(err))
+				}
+			}(segment)
+		}
+		wg.Wait()
 
 		err := syncReplicaSegments(ctx, lbt.cluster, lbt.getChildTask())
 		if err != nil {
