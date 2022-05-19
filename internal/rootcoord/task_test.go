@@ -64,24 +64,28 @@ func TestDescribeSegmentsReqTask_Execute(t *testing.T) {
 		return []typeutil.UniqueID{segID}, nil
 	}
 	c.MetaTable = &MetaTable{
-		segID2IndexMeta: map[typeutil.UniqueID]map[typeutil.UniqueID]model.SegmentIndex{},
+		segID2IndexMeta: map[typeutil.UniqueID]map[typeutil.UniqueID]model.Index{},
 	}
 	assert.NoError(t, tsk.Execute(context.Background()))
 
 	// index not found in meta.
 	c.MetaTable = &MetaTable{
-		segID2IndexMeta: map[typeutil.UniqueID]map[typeutil.UniqueID]model.SegmentIndex{
+		segID2IndexMeta: map[typeutil.UniqueID]map[typeutil.UniqueID]model.Index{
 			segID: {
 				indexID: {
-					Index: model.Index{
-						CollectionID: collID,
-						FieldID:      fieldID,
-						IndexID:      indexID,
+					CollectionID: collID,
+					FieldID:      fieldID,
+					IndexID:      indexID,
+					SegmentIndexes: []model.SegmentIndex{
+						{
+							Segment: model.Segment{
+								SegmentID:   segID,
+								PartitionID: partID,
+							},
+							BuildID:     buildID,
+							EnableIndex: true,
+						},
 					},
-					PartitionID: partID,
-					SegmentID:   segID,
-					BuildID:     buildID,
-					EnableIndex: true,
 				},
 			},
 		},
@@ -90,18 +94,22 @@ func TestDescribeSegmentsReqTask_Execute(t *testing.T) {
 
 	// success.
 	c.MetaTable = &MetaTable{
-		segID2IndexMeta: map[typeutil.UniqueID]map[typeutil.UniqueID]model.SegmentIndex{
+		segID2IndexMeta: map[typeutil.UniqueID]map[typeutil.UniqueID]model.Index{
 			segID: {
 				indexID: {
-					Index: model.Index{
-						CollectionID: collID,
-						FieldID:      fieldID,
-						IndexID:      indexID,
+					CollectionID: collID,
+					FieldID:      fieldID,
+					IndexID:      indexID,
+					SegmentIndexes: []model.SegmentIndex{
+						{
+							Segment: model.Segment{
+								SegmentID:   segID,
+								PartitionID: partID,
+							},
+							BuildID:     buildID,
+							EnableIndex: true,
+						},
 					},
-					PartitionID: partID,
-					SegmentID:   segID,
-					BuildID:     buildID,
-					EnableIndex: true,
 				},
 			},
 		},

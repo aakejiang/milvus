@@ -13,7 +13,6 @@ type Catalog interface {
 	GetCollectionByName(ctx context.Context, collectionName string, ts typeutil.Timestamp) (*model.Collection, error)
 	ListCollections(ctx context.Context, ts typeutil.Timestamp) (map[string]*model.Collection, error)
 	CollectionExists(ctx context.Context, collectionID typeutil.UniqueID, ts typeutil.Timestamp) bool
-	// TODO replace ddOpStr with ddOp
 	DropCollection(ctx context.Context, collectionInfo *model.Collection, ts typeutil.Timestamp) error
 
 	CreatePartition(ctx context.Context, coll *model.Collection, ts typeutil.Timestamp) error
@@ -21,9 +20,9 @@ type Catalog interface {
 	//GetPartitionWithVersion(ctx context.Context, collectionName string, partitionName string, version int) (model.Partition, error)
 	DropPartition(ctx context.Context, collectionInfo *model.Collection, partitionID typeutil.UniqueID, ts typeutil.Timestamp) error
 
-	CreateIndex(ctx context.Context, index *model.SegmentIndex) error
+	CreateIndex(ctx context.Context, col *model.Collection, index *model.Index) error
+	AlterIndex(ctx context.Context, oldIndex *model.Index, newIndex *model.Index) error
 	DropIndex(ctx context.Context, collectionInfo *model.Collection, dropIdxID typeutil.UniqueID, ts typeutil.Timestamp) error
-	ListSegmentIndexes(ctx context.Context) ([]*model.SegmentIndex, error)
 	ListIndexes(ctx context.Context) ([]*model.Index, error)
 
 	CreateAlias(ctx context.Context, collection *model.Collection, ts typeutil.Timestamp) error

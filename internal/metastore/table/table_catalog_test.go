@@ -550,20 +550,24 @@ func TestCreateIndex(t *testing.T) {
 	mock.ExpectExec("insert into segment_indexes").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 
-	index := &model.SegmentIndex{
-		Index: model.Index{
-			CollectionID: collID,
-			FieldID:      fieldID,
-			IndexID:      indexID,
-		},
-		SegmentID:   segID,
-		PartitionID: partID,
-		BuildID:     buildID,
-		EnableIndex: false,
+	index := &model.Index{
+		FieldID:   fieldID,
+		IndexID:   indexID,
+		IndexName: indexName,
 	}
 
+	var segmentIndexes []model.SegmentIndex
+	segmentIndex := model.SegmentIndex{
+		Segment: model.Segment{
+			SegmentID: segID,
+		},
+		EnableIndex: false,
+	}
+	segmentIndexes = append(segmentIndexes, segmentIndex)
+	index.SegmentIndexes = segmentIndexes
+
 	// now we execute our method
-	if err = tc.CreateIndex(context.TODO(), index); err != nil {
+	if err = tc.CreateIndex(context.TODO(), nil, index); err != nil {
 		t.Errorf("error was not expected while creating collection: %s", err)
 	}
 

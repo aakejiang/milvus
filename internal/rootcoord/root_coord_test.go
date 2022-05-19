@@ -686,7 +686,7 @@ func TestRootCoordInitData(t *testing.T) {
 		remove: func(key string) error { return txnKV.Remove(key) },
 	}
 	//mt.txn = mockTxnKV
-	mt.catalog = &kvmetestore.KVCatalog{Txn: mockTxnKV, Snapshot: snapshotKV}
+	mt.catalog = &kvmetestore.Catalog{Txn: mockTxnKV, Snapshot: snapshotKV}
 	core.MetaTable = mt
 	err = core.initData()
 	assert.Error(t, err)
@@ -3047,7 +3047,7 @@ func TestCheckFlushedSegments(t *testing.T) {
 		var segID int64 = 1001
 		var fieldID int64 = 101
 		var indexID int64 = 6001
-		core.MetaTable.segID2IndexMeta[segID] = make(map[int64]model.SegmentIndex)
+		core.MetaTable.segID2IndexMeta[segID] = make(map[int64]model.Index)
 		core.MetaTable.partID2SegID[partID] = make(map[int64]bool)
 		core.MetaTable.collID2Meta[collID] = model.Collection{CollectionID: collID}
 		// do nothing, since collection has 0 index
@@ -3278,18 +3278,21 @@ func TestCore_DescribeSegments(t *testing.T) {
 
 	// success.
 	c.MetaTable = &MetaTable{
-		segID2IndexMeta: map[typeutil.UniqueID]map[typeutil.UniqueID]model.SegmentIndex{
+		segID2IndexMeta: map[typeutil.UniqueID]map[typeutil.UniqueID]model.Index{
 			segID: {
 				indexID: {
-					Index: model.Index{
-						CollectionID: collID,
-						FieldID:      fieldID,
-						IndexID:      indexID,
+					CollectionID: collID,
+					FieldID:      fieldID,
+					IndexID:      indexID,
+					SegmentIndexes: []model.SegmentIndex{
+						{
+							Segment: model.Segment{
+								PartitionID: partID,
+								SegmentID:   segID,
+							},
+							BuildID:     buildID,
+							EnableIndex: true},
 					},
-					PartitionID: partID,
-					SegmentID:   segID,
-					BuildID:     buildID,
-					EnableIndex: true,
 				},
 			},
 		},

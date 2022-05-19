@@ -21,13 +21,11 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/milvus-io/milvus/internal/metastore/kv"
-
-	"github.com/milvus-io/milvus/internal/metastore"
-
 	"github.com/golang/protobuf/proto"
 	"github.com/milvus-io/milvus/internal/common"
 	"github.com/milvus-io/milvus/internal/log"
+	"github.com/milvus-io/milvus/internal/metastore"
+	"github.com/milvus-io/milvus/internal/metastore/kv"
 	"github.com/milvus-io/milvus/internal/metastore/model"
 	"github.com/milvus-io/milvus/internal/proto/commonpb"
 	"github.com/milvus-io/milvus/internal/proto/etcdpb"
@@ -791,16 +789,16 @@ func (t *DescribeSegmentReqTask) Execute(ctx context.Context) error {
 		return fmt.Errorf("segment id %d not belong to collection id %d", t.Req.SegmentID, t.Req.CollectionID)
 	}
 	//TODO, get filed_id and index_name from request
-	segIdxInfo, err := t.core.MetaTable.GetSegmentIndexInfoByID(t.Req.SegmentID, -1, "")
+	index, err := t.core.MetaTable.GetSegmentIndexInfoByID(t.Req.SegmentID, -1, "")
 	log.Debug("RootCoord DescribeSegmentReqTask, MetaTable.GetSegmentIndexInfoByID", zap.Any("SegmentID", t.Req.SegmentID),
-		zap.Any("segIdxInfo", segIdxInfo), zap.Error(err))
+		zap.Any("index", index), zap.Error(err))
 	if err != nil {
 		return err
 	}
-	t.Rsp.IndexID = segIdxInfo.IndexID
-	t.Rsp.BuildID = segIdxInfo.BuildID
-	t.Rsp.EnableIndex = segIdxInfo.EnableIndex
-	t.Rsp.FieldID = segIdxInfo.FieldID
+	t.Rsp.IndexID = index.IndexID
+	t.Rsp.BuildID = index.SegmentIndexes[0].BuildID
+	t.Rsp.EnableIndex = index.SegmentIndexes[0].EnableIndex
+	t.Rsp.FieldID = index.FieldID
 	return nil
 }
 
@@ -894,22 +892,23 @@ func (t *DescribeSegmentsReqTask) Execute(ctx context.Context) error {
 			}
 		}
 
-		segmentInfo, err := t.core.MetaTable.GetSegmentIndexInfos(segID)
+		index, err := t.core.MetaTable.GetSegmentIndexInfos(segID)
 		if err != nil {
 			continue
 		}
 
-		for indexID, indexInfo := range segmentInfo {
+		for indexID, indexInfo := range index {
+			segmentIndex := indexInfo.SegmentIndexes[0]
 			t.Rsp.SegmentInfos[segID].IndexInfos =
 				append(t.Rsp.SegmentInfos[segID].IndexInfos,
 					&etcdpb.SegmentIndexInfo{
 						CollectionID: indexInfo.CollectionID,
-						PartitionID:  indexInfo.PartitionID,
-						SegmentID:    indexInfo.SegmentID,
+						PartitionID:  segmentIndex.Segment.PartitionID,
+						SegmentID:    segmentIndex.Segment.SegmentID,
 						FieldID:      indexInfo.FieldID,
 						IndexID:      indexInfo.IndexID,
-						BuildID:      indexInfo.BuildID,
-						EnableIndex:  indexInfo.EnableIndex,
+						BuildID:      segmentIndex.BuildID,
+						EnableIndex:  segmentIndex.EnableIndex,
 					})
 			extraIndexInfo, err := t.core.MetaTable.GetIndexByID(indexID)
 			if err != nil {
@@ -973,41 +972,50 @@ func (t *CreateIndexReqTask) Execute(ctx context.Context) error {
 		flushedSegs = append(flushedSegs, k)
 	}
 	if err != nil {
-		log.Debug("Get flushed segments from data coord failed", zap.String("collection_name", collMeta.Name), zap.Error(err))
+		log.Debug("get flushed segments from data coord failed", zap.String("collection_name", collMeta.Name), zap.Error(err))
 		return err
 	}
 
 	segIDs, field, err := t.core.MetaTable.GetNotIndexedSegments(t.Req.CollectionName, t.Req.FieldName, idxInfo, flushedSegs)
 	if err != nil {
-		log.Debug("RootCoord CreateIndexReqTask metaTable.GetNotIndexedSegments", zap.Error(err))
+		log.Debug("get not indexed segments failed", zap.Int64("collection_id", collMeta.CollectionID), zap.Error(err))
+		return err
+	}
+
+	if err := t.core.MetaTable.AddIndex(t.Req.CollectionName, t.Req.FieldName, idxInfo, segIDs); err != nil {
+		log.Debug("add index into metastore failed", zap.Int64("collection_id", collMeta.CollectionID), zap.Int64("index_id", idxInfo.IndexID), zap.Error(err))
 		return err
 	}
 
 	collectionID := collMeta.CollectionID
-	cnt := 0
 
 	for _, segID := range segIDs {
-		info := model.SegmentIndex{
-			Index: model.Index{
-				CollectionID: collectionID,
-				FieldID:      field.FieldID,
-				IndexID:      idxInfo.IndexID,
+		segmentIndex := model.SegmentIndex{
+			Segment: model.Segment{
+				SegmentID:   segID,
+				PartitionID: segID2PartID[segID],
 			},
-			PartitionID: segID2PartID[segID],
-			SegmentID:   segID,
 			EnableIndex: false,
 		}
-		info.BuildID, err = t.core.BuildIndex(ctx, segID, &field, idxInfo, false)
+
+		segmentIndex.BuildID, err = t.core.BuildIndex(ctx, segID, &field, idxInfo, false)
 		if err != nil {
 			return err
 		}
-		if info.BuildID != 0 {
-			info.EnableIndex = true
+		if segmentIndex.BuildID != 0 {
+			segmentIndex.EnableIndex = true
 		}
-		if err := t.core.MetaTable.AddIndex(&info); err != nil {
-			log.Debug("Add index into meta table failed", zap.Int64("collection_id", collMeta.CollectionID), zap.Int64("index_id", info.IndexID), zap.Int64("build_id", info.BuildID), zap.Error(err))
+
+		index := &model.Index{
+			CollectionID:   collectionID,
+			FieldID:        field.FieldID,
+			IndexID:        idxInfo.IndexID,
+			SegmentIndexes: []model.SegmentIndex{segmentIndex},
 		}
-		cnt++
+
+		if err := t.core.MetaTable.AlterIndex(index); err != nil {
+			log.Debug("alter index into meta table failed", zap.Int64("collection_id", collMeta.CollectionID), zap.Int64("index_id", index.IndexID), zap.Int64("build_id", segmentIndex.BuildID), zap.Error(err))
+		}
 	}
 
 	return nil

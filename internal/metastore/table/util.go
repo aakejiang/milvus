@@ -202,29 +202,6 @@ func ConvertSegmentIndexDBToIndexModel(fieldIndex *Index) *model.Index {
 	}
 }
 
-func ConvertSegmentIndexDBToModel(fieldIndex *SegmentIndex) *model.SegmentIndex {
-	return &model.SegmentIndex{
-		Index: model.Index{
-			CollectionID: fieldIndex.CollectionID,
-			FieldID:      fieldIndex.FieldID,
-			IndexID:      fieldIndex.IndexID,
-		},
-		PartitionID: fieldIndex.PartitionID,
-		SegmentID:   fieldIndex.SegmentID,
-		BuildID:     fieldIndex.BuildID,
-		//EnableIndex:  fieldIndex.EnableIndex, // TODO populate it!!!
-	}
-}
-
-func BatchConvertSegmentIndexDBToModel(fieldIndexes []*SegmentIndex) []*model.SegmentIndex {
-	var indexes []*model.SegmentIndex
-	for _, fi := range fieldIndexes {
-		index := ConvertSegmentIndexDBToModel(fi)
-		indexes = append(indexes, index)
-	}
-	return indexes
-}
-
 func ConvertUserDBToModel(user *User) *model.Credential {
 	return &model.Credential{
 		Username:          user.Username,

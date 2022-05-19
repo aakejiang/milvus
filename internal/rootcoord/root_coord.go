@@ -397,21 +397,26 @@ func (c *Core) checkFlushedSegments(ctx context.Context) {
 						log.Debug("index meta does not exist", zap.Int64("index_id", idxInfo.IndexID))
 						continue
 					}
-					info := model.SegmentIndex{
-						Index: model.Index{
-							CollectionID: collMeta.CollectionID,
-							FieldID:      idxInfo.FieldID,
-							IndexID:      idxInfo.IndexID,
+					info := model.Index{
+						CollectionID: collMeta.CollectionID,
+						FieldID:      idxInfo.FieldID,
+						IndexID:      idxInfo.IndexID,
+						SegmentIndexes: []model.SegmentIndex{
+							{
+								Segment: model.Segment{
+									SegmentID:   segID,
+									PartitionID: part.PartitionID,
+								},
+								EnableIndex: false,
+							},
 						},
-						PartitionID: part.PartitionID,
-						SegmentID:   segID,
-						EnableIndex: false,
 					}
 					log.Debug("building index by background checker",
 						zap.Int64("segment_id", segID),
 						zap.Int64("index_id", indexMeta.IndexID),
 						zap.Int64("collection_id", collMeta.CollectionID))
-					info.BuildID, err = c.BuildIndex(ctx2, segID, field, &indexMeta, false)
+					segmentIndex := info.SegmentIndexes[0]
+					segmentIndex.BuildID, err = c.BuildIndex(ctx2, segID, field, &indexMeta, false)
 					if err != nil {
 						log.Debug("build index failed",
 							zap.Int64("segment_id", segID),
@@ -419,14 +424,14 @@ func (c *Core) checkFlushedSegments(ctx context.Context) {
 							zap.Int64("index_id", indexMeta.IndexID))
 						continue
 					}
-					if info.BuildID != 0 {
-						info.EnableIndex = true
+					if segmentIndex.BuildID != 0 {
+						segmentIndex.EnableIndex = true
 					}
-					if err := c.MetaTable.AddIndex(&info); err != nil {
+					if err := c.MetaTable.AlterIndex(&info); err != nil {
 						log.Debug("Add index into meta table failed",
 							zap.Int64("collection_id", collMeta.CollectionID),
 							zap.Int64("index_id", info.IndexID),
-							zap.Int64("build_id", info.BuildID),
+							zap.Int64("build_id", segmentIndex.BuildID),
 							zap.Error(err))
 					}
 				}
@@ -918,8 +923,7 @@ func (c *Core) BuildIndex(ctx context.Context, segID typeutil.UniqueID, field *m
 	sp, ctx := trace.StartSpanFromContext(ctx)
 	defer sp.Finish()
 	if c.MetaTable.IsSegmentIndexed(segID, field, idxInfo.IndexParams) {
-		info, err := c.MetaTable.GetSegmentIndexInfoByID(segID, field.FieldID, idxInfo.IndexName)
-		return info.BuildID, err
+		return 0, nil
 	}
 	rows, err := c.CallGetNumRowsService(ctx, segID, isFlush)
 	if err != nil {
@@ -2084,29 +2088,34 @@ func (c *Core) SegmentFlushCompleted(ctx context.Context, in *datapb.SegmentFlus
 			continue
 		}
 
-		info := model.SegmentIndex{
-			Index: model.Index{
-				CollectionID: in.Segment.CollectionID,
-				FieldID:      fieldSch.FieldID,
-				IndexID:      idxInfo.IndexID,
+		info := model.Index{
+			CollectionID: in.Segment.CollectionID,
+			FieldID:      fieldSch.FieldID,
+			IndexID:      idxInfo.IndexID,
+			SegmentIndexes: []model.SegmentIndex{
+				{
+					Segment: model.Segment{
+						SegmentID:   segID,
+						PartitionID: in.Segment.PartitionID,
+					},
+					EnableIndex: false,
+				},
 			},
-			PartitionID: in.Segment.PartitionID,
-			SegmentID:   segID,
-			EnableIndex: false,
 		}
-		info.BuildID, err = c.BuildIndex(ctx, segID, fieldSch, idxInfo, true)
-		if err == nil && info.BuildID != 0 {
-			info.EnableIndex = true
+		segmentIndex := info.SegmentIndexes[0]
+		segmentIndex.BuildID, err = c.BuildIndex(ctx, segID, fieldSch, idxInfo, true)
+		if err == nil && segmentIndex.BuildID != 0 {
+			segmentIndex.EnableIndex = true
 		} else {
 			log.Error("BuildIndex failed", zap.String("role", typeutil.RootCoordRole),
 				zap.String("collection_name", coll.Name), zap.Int64("field id", f.FieldID),
-				zap.Int64("index id", f.IndexID), zap.Int64("build id", info.BuildID),
+				zap.Int64("index id", f.IndexID), zap.Int64("build id", segmentIndex.BuildID),
 				zap.Int64("msgID", in.Base.MsgID), zap.Error(err))
 			continue
 		}
-		err = c.MetaTable.AddIndex(&info)
+		err = c.MetaTable.AlterIndex(&info)
 		if err != nil {
-			log.Error("AddIndex failed", zap.String("role", typeutil.RootCoordRole),
+			log.Error("AlterIndex failed", zap.String("role", typeutil.RootCoordRole),
 				zap.String("collection_name", coll.Name), zap.Int64("field id", f.FieldID),
 				zap.Int64("index id", f.IndexID), zap.Int64("msgID", in.Base.MsgID), zap.Error(err))
 			continue

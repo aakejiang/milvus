@@ -151,29 +151,53 @@ func ConvertToCollectionPB(coll *model.Collection) *pb.CollectionInfo {
 	}
 }
 
-func ConvertToSegmentIndexPB(index *model.SegmentIndex) *pb.SegmentIndexInfo {
+func ConvertToSegmentIndexPB(index *model.Index) *pb.SegmentIndexInfo {
 	return &pb.SegmentIndexInfo{
 		CollectionID: index.CollectionID,
-		PartitionID:  index.PartitionID,
-		SegmentID:    index.SegmentID,
+		PartitionID:  index.SegmentIndexes[0].Segment.PartitionID,
+		SegmentID:    index.SegmentIndexes[0].Segment.SegmentID,
+		BuildID:      index.SegmentIndexes[0].BuildID,
+		EnableIndex:  index.SegmentIndexes[0].EnableIndex,
 		FieldID:      index.FieldID,
 		IndexID:      index.IndexID,
-		BuildID:      index.BuildID,
-		EnableIndex:  index.EnableIndex,
 	}
 }
 
-func ConvertSegmentIndexPBToModel(segIndex *pb.SegmentIndexInfo) *model.SegmentIndex {
-	return &model.SegmentIndex{
-		Index: model.Index{
-			CollectionID: segIndex.CollectionID,
-			FieldID:      segIndex.FieldID,
-			IndexID:      segIndex.IndexID,
+func MergeIndexModel(a *model.Index, b *model.Index) *model.Index {
+	if a.IndexName == "" {
+		a.IndexName = b.IndexName
+	}
+
+	if a.IndexParams == nil {
+		a.IndexParams = b.IndexParams
+	}
+
+	if a.SegmentIndexes == nil {
+		a.SegmentIndexes = b.SegmentIndexes
+	}
+
+	if a.Extra == nil {
+		a.Extra = b.Extra
+	}
+
+	return a
+}
+
+func ConvertSegmentIndexPBToModel(segIndex *pb.SegmentIndexInfo) *model.Index {
+	return &model.Index{
+		CollectionID: segIndex.CollectionID,
+		SegmentIndexes: []model.SegmentIndex{
+			{
+				Segment: model.Segment{
+					SegmentID:   segIndex.SegmentID,
+					PartitionID: segIndex.PartitionID,
+				},
+				BuildID:     segIndex.BuildID,
+				EnableIndex: segIndex.EnableIndex,
+			},
 		},
-		SegmentID:   segIndex.SegmentID,
-		PartitionID: segIndex.PartitionID,
-		BuildID:     segIndex.BuildID,
-		EnableIndex: segIndex.EnableIndex,
+		FieldID: segIndex.FieldID,
+		IndexID: segIndex.IndexID,
 	}
 }
 

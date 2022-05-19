@@ -23,9 +23,8 @@ import (
 	"path"
 	"sync"
 
-	"github.com/milvus-io/milvus/internal/metastore/kv"
-
 	"github.com/milvus-io/milvus/internal/log"
+	"github.com/milvus-io/milvus/internal/metastore/kv"
 	"github.com/milvus-io/milvus/internal/metrics"
 	"github.com/milvus-io/milvus/internal/util/sessionutil"
 	"github.com/milvus-io/milvus/internal/util/typeutil"

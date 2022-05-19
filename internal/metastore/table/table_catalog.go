@@ -391,7 +391,7 @@ func (tc *TableCatalog) DropPartition(ctx context.Context, collection *model.Col
 	return nil
 }
 
-func (tc *TableCatalog) CreateIndex(ctx context.Context, index *model.SegmentIndex) error {
+func (tc *TableCatalog) CreateIndex(ctx context.Context, col *model.Collection, index *model.Index) error {
 	// start transaction
 	tx, err := tc.DB.Beginx()
 	if err != nil {
@@ -431,29 +431,37 @@ func (tc *TableCatalog) CreateIndex(ctx context.Context, index *model.SegmentInd
 
 	// sql 2
 	sqlStr2 := "insert into segment_indexes(collection_id, partition_id, segment_id, field_id, index_id, build_id, enable_index, index_file_paths, index_size) values (:collection_id, :partition_id, :segment_id, :field_id, :index_id, :build_id, :enable_index, :index_file_paths, :index_size)"
-	indexFilePaths, err := json.Marshal(index.IndexFilePaths)
-	if err != nil {
-		log.Error("marshal alias failed", zap.Error(err))
-		return err
+	var segIndexes []SegmentIndex
+	for _, segIndex := range index.SegmentIndexes {
+		indexFilePaths, err := json.Marshal(segIndex.IndexFilePaths)
+		if err != nil {
+			log.Error("marshal alias failed", zap.Error(err))
+			continue
+		}
+		indexFilePathsStr := string(indexFilePaths)
+		si := SegmentIndex{
+			CollectionID:   index.CollectionID,
+			PartitionID:    segIndex.PartitionID,
+			SegmentID:      segIndex.SegmentID,
+			FieldID:        index.FieldID,
+			IndexID:        index.IndexID,
+			BuildID:        segIndex.BuildID,
+			EnableIndex:    segIndex.EnableIndex,
+			IndexFilePaths: indexFilePathsStr,
+			IndexSize:      segIndex.IndexSize,
+		}
+		segIndexes = append(segIndexes, si)
 	}
-	indexFilePathsStr := string(indexFilePaths)
-	fi := SegmentIndex{
-		CollectionID:   index.CollectionID,
-		PartitionID:    index.PartitionID,
-		SegmentID:      index.SegmentID,
-		FieldID:        index.FieldID,
-		IndexID:        index.IndexID,
-		BuildID:        index.BuildID,
-		EnableIndex:    index.EnableIndex,
-		IndexFilePaths: indexFilePathsStr,
-		IndexSize:      index.IndexSize,
-	}
-	_, err = tx.NamedExec(sqlStr2, fi)
+	_, err = tx.NamedExec(sqlStr2, segIndexes)
 	if err != nil {
 		log.Error("insert segment_indexes failed", zap.Error(err))
 		return err
 	}
 
+	return nil
+}
+
+func (tc *TableCatalog) AlterIndex(ctx context.Context, oldIndex *model.Index, newIndex *model.Index) error {
 	return nil
 }
 
@@ -498,17 +506,6 @@ func (tc *TableCatalog) DropIndex(ctx context.Context, collectionInfo *model.Col
 	log.Debug("table segment_indexes RowsAffected:", zap.Any("rows", n))
 
 	return nil
-}
-
-func (tc *TableCatalog) ListSegmentIndexes(ctx context.Context) ([]*model.SegmentIndex, error) {
-	sqlStr := "select collection_id, partition_id, segment_id, field_id, index_id, build_id from segment_indexes where is_deleted=false"
-	var indexes []*SegmentIndex
-	err := tc.DB.Select(&indexes, sqlStr)
-	if err != nil {
-		log.Error("list segment indexes failed", zap.Error(err))
-		return nil, err
-	}
-	return BatchConvertSegmentIndexDBToModel(indexes), nil
 }
 
 func (tc *TableCatalog) ListIndexes(ctx context.Context) ([]*model.Index, error) {

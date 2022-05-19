@@ -14,16 +14,10 @@ type Segment struct {
 	IndexInfos          []*SegmentIndex
 	ReplicaIds          []int64
 	NodeIds             []int64
-	// backwards compatible
-	//NodeID    int64
-	//IndexName string
-	//IndexID   int64
 }
 
 type SegmentIndex struct {
-	Index
-	SegmentID      int64
-	PartitionID    int64
+	Segment
 	EnableIndex    bool
 	BuildID        int64
 	IndexSize      uint64
