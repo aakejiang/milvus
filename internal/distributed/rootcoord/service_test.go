@@ -56,6 +56,12 @@ func (p *proxyMock) InvalidateCollectionMetaCache(ctx context.Context, request *
 	return p.invalidateCollectionMetaCache(ctx, request)
 }
 
+func (p *proxyMock) ReleaseDQLMessageStream(ctx context.Context, request *proxypb.ReleaseDQLMessageStreamRequest) (*commonpb.Status, error) {
+	return &commonpb.Status{
+		ErrorCode: commonpb.ErrorCode_Success,
+	}, nil
+}
+
 func TestGrpcService(t *testing.T) {
 	const (
 		dbName    = "testDB"
@@ -285,7 +291,9 @@ func TestGrpcService(t *testing.T) {
 
 	t.Run("release DQL msg stream", func(t *testing.T) {
 		req := &proxypb.ReleaseDQLMessageStreamRequest{}
-		assert.Panics(t, func() { svr.ReleaseDQLMessageStream(ctx, req) })
+		rsp, err := svr.ReleaseDQLMessageStream(ctx, req)
+		assert.Nil(t, err)
+		assert.Equal(t, commonpb.ErrorCode_Success, rsp.ErrorCode)
 	})
 
 	t.Run("get metrics", func(t *testing.T) {
@@ -762,7 +770,6 @@ func TestGrpcService(t *testing.T) {
 		assert.Equal(t, commonpb.ErrorCode_Success, status.ErrorCode)
 		assert.Equal(t, collName, dropCollectionArray[0].CollectionName)
 		assert.Equal(t, 3, len(collectionMetaCache))
-		assert.Equal(t, collName, collectionMetaCache[0])
 
 		req = &milvuspb.DropCollectionRequest{
 			Base: &commonpb.MsgBase{

@@ -37,6 +37,15 @@ etcd:
     # Embedded Etcd only.
     # please adjust in embedded Milvus: /tmp/milvus/etcdData/
     dir: default.etcd
+  ssl:
+    enabled: false # Whether to support ETCD secure connection mode
+    tlsCert: /path/to/etcd-client.pem # path to your cert file
+    tlsKey: /path/to/etcd-client-key.pem # path to your key file
+    tlsCACert:  /path/to/ca.pem # path to your CACert file
+    # TLS min version
+    # Optional values: 1.0, 1.1, 1.2, 1.3。
+    # We recommend using version 1.2 and above
+    tlsMinVersion: 1.3
 
 db:
   username: root
@@ -172,6 +181,8 @@ queryNode:
   # Segcore will divide a segment into multiple chunks to enbale small index
   segcore:
     chunkRows: 32768 # The number of vectors in a chunk.
+    # Note: we have disabled segment small index since @2022.05.12. So below related configurations won't work.
+    # We won't create small index for growing segments and search on these segments will directly use bruteforce scan.
     smallIndex:
       nlist: 256 # small index nlist, recommend to set sqrt(chunkRows), must smaller than chunkRows/8
       nprobe: 16 # nprobe to search small index, based on your accuracy requirement, must smaller than nlist

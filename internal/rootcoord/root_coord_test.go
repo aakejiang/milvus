@@ -74,7 +74,11 @@ type ctxKey struct{}
 type proxyMock struct {
 	types.Proxy
 	collArray []string
+	collIDs   []UniqueID
 	mutex     sync.Mutex
+
+	returnError     bool
+	returnGrpcError bool
 }
 
 func (p *proxyMock) Stop() error {
@@ -84,11 +88,21 @@ func (p *proxyMock) Stop() error {
 func (p *proxyMock) InvalidateCollectionMetaCache(ctx context.Context, request *proxypb.InvalidateCollMetaCacheRequest) (*commonpb.Status, error) {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
+	if p.returnError {
+		return &commonpb.Status{
+			ErrorCode: commonpb.ErrorCode_UnexpectedError,
+		}, nil
+	}
+	if p.returnGrpcError {
+		return nil, fmt.Errorf("grpc error")
+	}
 	p.collArray = append(p.collArray, request.CollectionName)
+	p.collIDs = append(p.collIDs, request.CollectionID)
 	return &commonpb.Status{
 		ErrorCode: commonpb.ErrorCode_Success,
 	}, nil
 }
+
 func (p *proxyMock) GetCollArray() []string {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
@@ -97,7 +111,37 @@ func (p *proxyMock) GetCollArray() []string {
 	return ret
 }
 
+func (p *proxyMock) GetCollIDs() []UniqueID {
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
+	ret := p.collIDs
+	return ret
+}
+
 func (p *proxyMock) ReleaseDQLMessageStream(ctx context.Context, request *proxypb.ReleaseDQLMessageStreamRequest) (*commonpb.Status, error) {
+	if p.returnError {
+		return &commonpb.Status{
+			ErrorCode: commonpb.ErrorCode_UnexpectedError,
+		}, nil
+	}
+	if p.returnGrpcError {
+		return nil, fmt.Errorf("grpc error")
+	}
+	return &commonpb.Status{
+		ErrorCode: commonpb.ErrorCode_Success,
+		Reason:    "",
+	}, nil
+}
+
+func (p *proxyMock) InvalidateCredentialCache(ctx context.Context, request *proxypb.InvalidateCredCacheRequest) (*commonpb.Status, error) {
+	if p.returnError {
+		return &commonpb.Status{
+			ErrorCode: commonpb.ErrorCode_UnexpectedError,
+		}, nil
+	}
+	if p.returnGrpcError {
+		return nil, fmt.Errorf("grpc error")
+	}
 	return &commonpb.Status{
 		ErrorCode: commonpb.ErrorCode_Success,
 		Reason:    "",
@@ -1065,8 +1109,8 @@ func TestRootCoord_Base(t *testing.T) {
 		assert.Equal(t, collMeta.CollectionID, partMsg.CollectionID)
 		assert.Equal(t, collMeta.Partitions[1].PartitionID, partMsg.PartitionID)
 
-		assert.Equal(t, 1, len(pnm.GetCollArray()))
-		assert.Equal(t, collName, pnm.GetCollArray()[0])
+		assert.Equal(t, 1, len(pnm.GetCollIDs()))
+		assert.Equal(t, collMeta.CollectionID, pnm.GetCollIDs()[0])
 
 		// check DD operation info
 		flag, err := core.MetaTable.txn.Load(metastore.DDMsgSendPrefix)
@@ -1657,8 +1701,8 @@ func TestRootCoord_Base(t *testing.T) {
 		assert.Equal(t, collMeta.CollectionID, dmsg.CollectionID)
 		assert.Equal(t, dropPartID, dmsg.PartitionID)
 
-		assert.Equal(t, 2, len(pnm.GetCollArray()))
-		assert.Equal(t, collName, pnm.GetCollArray()[1])
+		assert.Equal(t, 2, len(pnm.GetCollIDs()))
+		assert.Equal(t, collMeta.CollectionID, pnm.GetCollIDs()[1])
 
 		// check DD operation info
 		flag, err := core.MetaTable.txn.Load(metastore.DDMsgSendPrefix)
@@ -1726,9 +1770,9 @@ func TestRootCoord_Base(t *testing.T) {
 		dmsg, ok := (msgs[0]).(*msgstream.DropCollectionMsg)
 		assert.True(t, ok)
 		assert.Equal(t, collMeta.CollectionID, dmsg.CollectionID)
-		collArray := pnm.GetCollArray()
-		assert.Equal(t, 3, len(collArray))
-		assert.Equal(t, collName, collArray[2])
+		collIDs := pnm.GetCollIDs()
+		assert.Equal(t, 3, len(collIDs))
+		assert.Equal(t, collMeta.CollectionID, collIDs[2])
 
 		time.Sleep(100 * time.Millisecond)
 		qm.mutex.Lock()
@@ -1750,9 +1794,9 @@ func TestRootCoord_Base(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, commonpb.ErrorCode_UnexpectedError, status.ErrorCode)
 		time.Sleep(100 * time.Millisecond)
-		collArray = pnm.GetCollArray()
-		assert.Equal(t, 3, len(collArray))
-		assert.Equal(t, collName, collArray[2])
+		collIDs = pnm.GetCollIDs()
+		assert.Equal(t, 3, len(collIDs))
+		assert.Equal(t, collMeta.CollectionID, collIDs[2])
 
 		// check DD operation info
 		flag, err := core.MetaTable.txn.Load(metastore.DDMsgSendPrefix)
