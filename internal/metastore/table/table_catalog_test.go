@@ -193,14 +193,14 @@ func TestGetCollectionByID(t *testing.T) {
 	}
 
 	// mock select normal
-	aliasesStr, _ := json.Marshal([]string{"a", "b"})
+	aliasesBytes, _ := json.Marshal([]string{"a", "b"})
 	collTimestamp := 433286016553713676
 	var partCreatedTimestamp uint64 = 433286016527499280
 	rows := sqlmock.NewRows(
 		[]string{"id", "tenant_id", "collection_id", "collection_name", "collection_alias", "description", "auto_id", "ts", "properties", "is_deleted",
 			"id", "partition_id", "partition_name", "partition_created_timestamp", "collection_id", "ts", "is_deleted", "created_at", "updated_at",
 			"id", "field_id", "field_name"},
-	).AddRow([]driver.Value{1, tenantID, collID, collName, string(aliasesStr), "", false, collTimestamp, "{}", false,
+	).AddRow([]driver.Value{1, tenantID, collID, collName, string(aliasesBytes), "", false, collTimestamp, "{}", false,
 		10, partID, partName, partCreatedTimestamp, collID, 433286016461963275, false, time.Now(), time.Now(),
 		1000, fieldID, fieldName}...)
 	mock.ExpectQuery(sqlSelectSql).WillReturnRows(rows)
@@ -293,14 +293,14 @@ func TestListCollections(t *testing.T) {
 	}
 
 	// mock select normal
-	aliasesStr, _ := json.Marshal([]string{"a", "b"})
+	aliasesBytes, _ := json.Marshal([]string{"a", "b"})
 	collTimestamp := 433286016553713676
 	var partCreatedTimestamp uint64 = 433286016527499280
 	rows := sqlmock.NewRows(
 		[]string{"id", "tenant_id", "collection_id", "collection_name", "collection_alias", "description", "auto_id", "ts", "properties", "is_deleted",
 			"id", "partition_id", "partition_name", "partition_created_timestamp", "collection_id", "ts", "is_deleted", "created_at", "updated_at",
 			"id", "field_id", "field_name"},
-	).AddRow([]driver.Value{1, tenantID, collID, collName, string(aliasesStr), "", false, collTimestamp, "{}", false,
+	).AddRow([]driver.Value{1, tenantID, collID, collName, string(aliasesBytes), "", false, collTimestamp, "{}", false,
 		10, partID, partName, partCreatedTimestamp, collID, 433286016461963275, false, time.Now(), time.Now(),
 		1000, fieldID, fieldName}...)
 	mock.ExpectQuery(sqlSelectSql).WillReturnRows(rows)
@@ -630,5 +630,201 @@ func TestDropIndex_RollbackOnFailure(t *testing.T) {
 	// we make sure that all expectations were met
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("there were unfulfilled expectations: %s", err)
+	}
+}
+
+func TestListIndexes(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to open sqlmock database: %s", err)
+	}
+	defer db.Close()
+
+	sqlxDB := sqlx.NewDb(db, "sqlmock")
+	tc := TableCatalog{
+		DB: sqlxDB,
+	}
+
+	sqlSelectSql := "select"
+
+	// mock select failure
+	mock.ExpectQuery(sqlSelectSql).WillReturnError(errors.New("select error"))
+	_, err = tc.ListIndexes(context.TODO())
+	if !strings.Contains(err.Error(), "select error") {
+		t.Fatalf("unexpected error:%s", err)
+	}
+
+	// mock select normal
+	rows := sqlmock.NewRows(
+		[]string{"id", "field_id", "collection_id", "index_id", "index_name", "index_params",
+			"id", "partition_id", "segment_id", "field_id", "index_id", "build_id", "enable_index", "index_file_paths", "index_size"},
+	).AddRow([]driver.Value{1, fieldID, collID, indexID, indexName, "",
+		10, partID, segID, fieldID, indexID, buildID, false, "", 100}...)
+	mock.ExpectQuery(sqlSelectSql).WillReturnRows(rows)
+	res, err := tc.ListIndexes(context.TODO())
+	if err != nil {
+		t.Fatalf("unexpected error:%s", err)
+	}
+
+	idx := res[0]
+	if idx.CollectionID != collID {
+		t.Fatalf("unexpected collection_id:%d", idx.CollectionID)
+	}
+	if idx.FieldID != fieldID {
+		t.Fatalf("unexpected field_id:%d", idx.FieldID)
+	}
+	if idx.IndexID != indexID {
+		t.Fatalf("unexpected index_id:%d", idx.IndexID)
+	}
+	if idx.IndexName != indexName {
+		t.Fatalf("unexpected index_name:%s", idx.IndexName)
+	}
+	for _, segIndex := range idx.SegmentIndexes {
+		if segIndex.SegmentID != segID {
+			t.Fatalf("unexpected segment_id:%d", segIndex.SegmentID)
+		}
+		if segIndex.PartitionID != partID {
+			t.Fatalf("unexpected partition_id:%d", segIndex.PartitionID)
+		}
+		if segIndex.BuildID != buildID {
+			t.Fatalf("unexpected build_id:%d", segIndex.BuildID)
+		}
+		if segIndex.EnableIndex != false {
+			t.Fatalf("unexpected enable_index:%t", segIndex.EnableIndex)
+		}
+	}
+}
+
+func TestCreateAlias(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("an error '%s' was not expected when opening a stub database connection", err)
+	}
+	defer db.Close()
+	sqlxDB := sqlx.NewDb(db, "sqlmock")
+	tc := TableCatalog{
+		DB: sqlxDB,
+	}
+
+	rows := sqlmock.NewRows(
+		[]string{"id", "tenant_id", "collection_id", "collection_name", "collection_alias"},
+	).AddRow([]driver.Value{1, tenantID, collID, collName, nil}...)
+	mock.ExpectQuery("select").WithArgs(collID, ts).WillReturnRows(rows)
+	mock.ExpectExec("update collections").WillReturnResult(sqlmock.NewResult(0, 1))
+
+	// now we execute our request
+	coll := &model.Collection{
+		CollectionID: collID,
+		Aliases:      []string{aliasName1, aliasName2},
+	}
+	err = tc.CreateAlias(context.TODO(), coll, ts)
+	if err != nil {
+		t.Fatalf("unexpected error:%s", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("there were unfulfilled expectations: %s", err)
+	}
+}
+
+func TestDropAlias(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("an error '%s' was not expected when opening a stub database connection", err)
+	}
+	defer db.Close()
+	sqlxDB := sqlx.NewDb(db, "sqlmock")
+	tc := TableCatalog{
+		DB: sqlxDB,
+	}
+
+	aliasesBytes, _ := json.Marshal([]string{aliasName1, aliasName2})
+	rows := sqlmock.NewRows(
+		[]string{"id", "tenant_id", "collection_id", "collection_name", "collection_alias"},
+	).AddRow([]driver.Value{1, tenantID, collID, collName, string(aliasesBytes)}...)
+	mock.ExpectQuery("select").WithArgs(collID, ts).WillReturnRows(rows)
+	mock.ExpectExec("update collections").WillReturnResult(sqlmock.NewResult(0, 1))
+
+	// now we execute our request
+	err = tc.DropAlias(context.TODO(), collID, aliasName1, ts)
+	if err != nil {
+		t.Fatalf("unexpected error:%s", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("there were unfulfilled expectations: %s", err)
+	}
+}
+
+func TestAlterAlias(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("an error '%s' was not expected when opening a stub database connection", err)
+	}
+	defer db.Close()
+	sqlxDB := sqlx.NewDb(db, "sqlmock")
+	tc := TableCatalog{
+		DB: sqlxDB,
+	}
+
+	rows := sqlmock.NewRows(
+		[]string{"id", "tenant_id", "collection_id", "collection_name", "collection_alias"},
+	).AddRow([]driver.Value{1, tenantID, collID, collName, nil}...)
+	mock.ExpectQuery("select").WithArgs(collID, ts).WillReturnRows(rows)
+	mock.ExpectExec("update collections").WillReturnResult(sqlmock.NewResult(0, 1))
+
+	// now we execute our request
+	coll := &model.Collection{
+		CollectionID: collID,
+		Aliases:      []string{aliasName1, aliasName2},
+	}
+	err = tc.AlterAlias(context.TODO(), coll, ts)
+	if err != nil {
+		t.Fatalf("unexpected error:%s", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("there were unfulfilled expectations: %s", err)
+	}
+}
+
+func TestListAliases(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to open sqlmock database: %s", err)
+	}
+	defer db.Close()
+	sqlxDB := sqlx.NewDb(db, "sqlmock")
+	tc := TableCatalog{
+		DB: sqlxDB,
+	}
+
+	sqlSelectSql := "select"
+
+	// mock select failure
+	mock.ExpectQuery(sqlSelectSql).WillReturnError(errors.New("select error"))
+	_, err = tc.ListAliases(context.TODO())
+	if !strings.Contains(err.Error(), "select error") {
+		t.Fatalf("unexpected error:%s", err)
+	}
+
+	// mock select normal
+	aliaesBytes, _ := json.Marshal([]string{aliasName1, aliasName2})
+	rows := sqlmock.NewRows(
+		[]string{"collection_id", "collection_alias"},
+	).AddRow([]driver.Value{1, string(aliaesBytes)}...)
+	mock.ExpectQuery(sqlSelectSql).WillReturnRows(rows)
+	res, err := tc.ListAliases(context.TODO())
+	if err != nil {
+		t.Fatalf("unexpected error:%s", err)
+	}
+
+	if len(res) != 2 {
+		t.Fatalf("unexpected result:%d", len(res))
+	}
+	for _, coll := range res {
+		if coll.CollectionID != collID {
+			t.Fatalf("unexpected collection_id:%d", coll.CollectionID)
+		}
+		if coll.Name != aliasName1 && coll.Name != aliasName2 {
+			t.Fatalf("unexpected field_id:%s", coll.Name)
+		}
 	}
 }

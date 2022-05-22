@@ -509,14 +509,26 @@ func (tc *TableCatalog) DropIndex(ctx context.Context, collectionInfo *model.Col
 }
 
 func (tc *TableCatalog) ListIndexes(ctx context.Context) ([]*model.Index, error) {
-	sqlStr := "select index_id, index_name, index_params from indexes where is_deleted=false"
-	var indexes []*Index
-	err := tc.DB.Select(&indexes, sqlStr)
+	sqlStr := "select index_id, index_name, index_params " +
+		" from indexes i " +
+		" left join segment_indexes si on i.index_id = si.index_id and f.is_deleted = false " +
+		" where i.is_deleted=false"
+	var result []struct {
+		Index
+		SegmentIndex
+	}
+	err := tc.DB.Select(&result, sqlStr)
 	if err != nil {
 		log.Error("list indexes failed", zap.Error(err))
 		return nil, err
 	}
-	return BatchConvertIndexDBToModel(indexes), nil
+
+	indexMap := ConvertIndexesToMap(result)
+	indexes := make([]*model.Index, 0, len(indexMap))
+	for _, idx := range indexMap {
+		indexes = append(indexes, idx)
+	}
+	return indexes, nil
 }
 
 func (tc *TableCatalog) CreateAlias(ctx context.Context, collection *model.Collection, ts typeutil.Timestamp) error {
@@ -607,7 +619,7 @@ func (tc *TableCatalog) ListAliases(ctx context.Context) ([]*model.Collection, e
 	var collAlias []*model.Collection
 	for _, coll := range colls {
 		var aliases []string
-		err = json.Unmarshal([]byte(*coll.CollectionAlias), aliases)
+		err = json.Unmarshal([]byte(*coll.CollectionAlias), &aliases)
 		if err != nil {
 			log.Error("unmarshal collection alias failed", zap.Error(err))
 			continue

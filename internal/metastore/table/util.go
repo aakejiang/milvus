@@ -202,6 +202,66 @@ func ConvertSegmentIndexDBToIndexModel(fieldIndex *Index) *model.Index {
 	}
 }
 
+func ConvertSegmentIndexDBToSegmentIndexModel(segmentIndex *SegmentIndex) *model.SegmentIndex {
+	var indexFilePaths []string
+	err := json.Unmarshal([]byte(segmentIndex.IndexFilePaths), indexFilePaths)
+	if err != nil {
+		log.Error("unmarshal IndexFilePaths of segment index failed", zap.Error(err))
+	}
+	return &model.SegmentIndex{
+		Segment: model.Segment{
+			SegmentID:   segmentIndex.SegmentID,
+			PartitionID: segmentIndex.PartitionID,
+			//NumRows:             segmentIndex.,
+			//MemSize:             segmentIndex.,
+			//DmChannel:           segmentIndex.,
+			//CompactionFrom:      segmentIndex.,
+			//CreatedByCompaction: segmentIndex.,
+			//SegmentState:        segmentIndex.,
+			//ReplicaIds:          segmentIndex.,
+			//NodeIds:             segmentIndex.,
+		},
+		EnableIndex:    segmentIndex.EnableIndex,
+		BuildID:        segmentIndex.BuildID,
+		IndexSize:      segmentIndex.IndexSize,
+		IndexFilePaths: indexFilePaths,
+	}
+}
+
+func ConvertToIndexModel(index *Index, segmentIndex *SegmentIndex) *model.Index {
+	if index.IndexID == nil {
+		return nil
+	}
+	var indexParams []*commonpb.KeyValuePair
+	if index.IndexParams != nil {
+		err := json.Unmarshal([]byte(*index.IndexParams), indexParams)
+		if err != nil {
+			log.Error("unmarshal IndexParams of field failed", zap.Error(err))
+		}
+	}
+	segIndex := ConvertSegmentIndexDBToSegmentIndexModel(segmentIndex)
+	return &model.Index{
+		CollectionID:   *index.CollectionID,
+		FieldID:        *index.FieldID,
+		IndexID:        *index.IndexID,
+		IndexName:      *index.IndexName,
+		IndexParams:    indexParams,
+		SegmentIndexes: []model.SegmentIndex{*segIndex},
+	}
+}
+
+func ConvertIndexesToMap(input []struct {
+	Index
+	SegmentIndex
+}) map[string]*model.Index {
+	idxMap := make(map[string]*model.Index)
+	for _, record := range input {
+		c := ConvertToIndexModel(&record.Index, &record.SegmentIndex)
+		idxMap[c.IndexName] = c
+	}
+	return idxMap
+}
+
 func ConvertUserDBToModel(user *User) *model.Credential {
 	return &model.Credential{
 		Username:          user.Username,
