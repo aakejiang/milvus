@@ -127,15 +127,6 @@ func ConvertFieldDBToModel(field *Field) *model.Field {
 	}
 }
 
-func BatchConvertFieldDBToModel(fields []*Field) []*model.Field {
-	var result []*model.Field
-	for _, f := range fields {
-		field := ConvertFieldDBToModel(f)
-		result = append(result, field)
-	}
-	return result
-}
-
 func ConvertPartitionDBToModel(partiton *Partition) *model.Partition {
 	if partiton.PartitionID == nil || partiton.PartitionName == nil {
 		return nil
@@ -145,41 +136,6 @@ func ConvertPartitionDBToModel(partiton *Partition) *model.Partition {
 		PartitionName:             *partiton.PartitionName,
 		PartitionCreatedTimestamp: *partiton.PartitionCreatedTimestamp,
 	}
-}
-
-func BatchConvertPartitionDBToModel(partitons []*Partition) []*model.Partition {
-	var result []*model.Partition
-	for _, p := range partitons {
-		partition := ConvertPartitionDBToModel(p)
-		result = append(result, partition)
-	}
-	return result
-}
-
-func ConvertIndexDBToModel(index *Index) *model.Index {
-	var indexParams []*commonpb.KeyValuePair
-	if index.IndexParams != nil {
-		err := json.Unmarshal([]byte(*index.IndexParams), indexParams)
-		if err != nil {
-			log.Error("unmarshal IndexParams of index failed", zap.Error(err))
-		}
-	}
-	return &model.Index{
-		CollectionID: *index.CollectionID,
-		FieldID:      *index.FieldID,
-		IndexID:      *index.IndexID,
-		IndexName:    *index.IndexName,
-		IndexParams:  indexParams,
-	}
-}
-
-func BatchConvertIndexDBToModel(indexes []*Index) []*model.Index {
-	var result []*model.Index
-	for _, i := range indexes {
-		index := ConvertIndexDBToModel(i)
-		result = append(result, index)
-	}
-	return result
 }
 
 func ConvertSegmentIndexDBToIndexModel(fieldIndex *Index) *model.Index {
