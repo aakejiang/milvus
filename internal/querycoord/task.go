@@ -2175,6 +2175,10 @@ func (lbt *loadBalanceTask) execute(ctx context.Context) error {
 						Schema:       collectionInfo.Schema,
 						CollectionID: collectionID,
 						ReplicaID:    lbt.replicaID,
+						LoadMeta: &querypb.LoadMetaInfo{
+							CollectionID: collectionID,
+							PartitionIDs: collectionInfo.PartitionIDs,
+						},
 					}
 					loadSegmentReqs = append(loadSegmentReqs, loadSegmentReq)
 				}
@@ -2296,12 +2300,6 @@ func (lbt *loadBalanceTask) globalPostExecute(ctx context.Context) error {
 				offlineNodes.Insert(nodeID)
 			}
 
-			log.Debug("removing offline nodes from replicas and segments...",
-				zap.Int("len(replicas)", len(replicas)),
-				zap.Int("len(segments)", len(segments)),
-				zap.Int64("trigger task ID", lbt.getTaskID()),
-			)
-
 			for _, replica := range replicas {
 				replica := replica
 				wg.Go(func() error {
@@ -2343,6 +2341,11 @@ func (lbt *loadBalanceTask) globalPostExecute(ctx context.Context) error {
 
 					return err
 				}
+
+				log.Info("remove offline nodes from segment",
+					zap.Int64("taskID", lbt.getTaskID()),
+					zap.Int64("segmentID", segment.GetSegmentID()),
+					zap.Int64s("nodeIds", segment.GetNodeIds()))
 
 				return nil
 			})
