@@ -2,7 +2,6 @@ package table
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -142,10 +141,10 @@ func (tc *TableCatalog) GetCollectionByID(ctx context.Context, collectionID type
 		" left join indexes i on c.collection_id = i.collection_id and i.is_deleted=false " +
 		" where c.is_deleted=false and c.collection_id=? and c.ts=?"
 	var result []struct {
-		Collection
-		Partition
-		Field
-		Index
+		Collection `db:"c"`
+		Partition  `db:"p"`
+		Field      `db:"f"`
+		Index      `db:"i"`
 	}
 	err := tc.DB.Select(&result, sqlStr, collectionID, ts)
 	if err != nil {
@@ -194,10 +193,10 @@ func (tc *TableCatalog) ListCollections(ctx context.Context, ts typeutil.Timesta
 		" left join indexes i on c.collection_id = i.collection_id and i.is_deleted=false " +
 		" where c.is_deleted=false and c.ts=?"
 	var result []struct {
-		Collection
-		Partition
-		Field
-		Index
+		Collection `db:"c"`
+		Partition  `db:"p"`
+		Field      `db:"f"`
+		Index      `db:"i"`
 	}
 	err := tc.DB.Select(&result, sqlStr, ts)
 	if err != nil {
@@ -223,20 +222,6 @@ func (tc *TableCatalog) CollectionExists(ctx context.Context, collectionID typeu
 		return false
 	}
 	return true
-}
-
-func (tc *TableCatalog) ExecSqlWithTransaction(tx *sql.Tx, handle func(tx *sql.Tx) error) (err error) {
-	defer func() {
-		if p := recover(); p != nil {
-			tx.Rollback()
-			panic(p) // re-throw panic after Rollback
-		} else if err != nil {
-			tx.Rollback()
-		} else {
-			err = tx.Commit()
-		}
-	}()
-	return handle(tx)
 }
 
 func (tc *TableCatalog) DropCollection(ctx context.Context, collectionInfo *model.Collection, ts typeutil.Timestamp) error {

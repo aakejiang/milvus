@@ -46,7 +46,7 @@ func ConvertCollectionDBToModel(coll *Collection, partition *Partition, field *F
 	var retPartitions []*model.Partition
 	retPartitions = append(retPartitions, ConvertPartitionDBToModel(partition))
 	var retIndexes []*model.Index
-	retIndexes = append(retIndexes, ConvertSegmentIndexDBToIndexModel(index))
+	retIndexes = append(retIndexes, ConvertIndexDBToModel(index))
 	return &model.Collection{
 		CollectionID:         coll.CollectionID,
 		Name:                 coll.CollectionName,
@@ -138,27 +138,27 @@ func ConvertPartitionDBToModel(partiton *Partition) *model.Partition {
 	}
 }
 
-func ConvertSegmentIndexDBToIndexModel(fieldIndex *Index) *model.Index {
-	if fieldIndex.IndexID == nil {
+func ConvertIndexDBToModel(index *Index) *model.Index {
+	if index.IndexID == nil {
 		return nil
 	}
 	var indexParams []*commonpb.KeyValuePair
-	if fieldIndex.IndexParams != nil {
-		err := json.Unmarshal([]byte(*fieldIndex.IndexParams), indexParams)
+	if index.IndexParams != nil {
+		err := json.Unmarshal([]byte(*index.IndexParams), indexParams)
 		if err != nil {
 			log.Error("unmarshal IndexParams of field failed", zap.Error(err))
 		}
 	}
 	return &model.Index{
-		CollectionID: *fieldIndex.CollectionID,
-		FieldID:      *fieldIndex.FieldID,
-		IndexID:      *fieldIndex.IndexID,
-		IndexName:    *fieldIndex.IndexName,
+		CollectionID: *index.CollectionID,
+		FieldID:      *index.FieldID,
+		IndexID:      *index.IndexID,
+		IndexName:    *index.IndexName,
 		IndexParams:  indexParams,
 	}
 }
 
-func ConvertSegmentIndexDBToSegmentIndexModel(segmentIndex *SegmentIndex) *model.SegmentIndex {
+func ConvertSegmentIndexDBToModel(segmentIndex *SegmentIndex) *model.SegmentIndex {
 	var indexFilePaths []string
 	err := json.Unmarshal([]byte(segmentIndex.IndexFilePaths), indexFilePaths)
 	if err != nil {
@@ -195,7 +195,7 @@ func ConvertToIndexModel(index *Index, segmentIndex *SegmentIndex) *model.Index 
 			log.Error("unmarshal IndexParams of field failed", zap.Error(err))
 		}
 	}
-	segIndex := ConvertSegmentIndexDBToSegmentIndexModel(segmentIndex)
+	segIndex := ConvertSegmentIndexDBToModel(segmentIndex)
 	return &model.Index{
 		CollectionID:   *index.CollectionID,
 		FieldID:        *index.FieldID,
