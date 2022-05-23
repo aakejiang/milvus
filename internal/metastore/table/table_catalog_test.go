@@ -828,3 +828,143 @@ func TestListAliases(t *testing.T) {
 		}
 	}
 }
+
+func TestGetCredential(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to open sqlmock database: %s", err)
+	}
+	defer db.Close()
+	sqlxDB := sqlx.NewDb(db, "sqlmock")
+	tc := TableCatalog{
+		DB: sqlxDB,
+	}
+
+	sqlSelectSql := "select"
+
+	// mock select failure
+	mock.ExpectQuery(sqlSelectSql).WillReturnError(errors.New("select error"))
+	_, err = tc.GetCredential(context.TODO(), "Alice")
+	if !strings.Contains(err.Error(), "select error") {
+		t.Fatalf("unexpected error:%s", err)
+	}
+
+	// mock select normal
+	rows := sqlmock.NewRows(
+		[]string{"tenant_id", "username", "encrypted_password", "is_super", "is_deleted"},
+	).AddRow([]driver.Value{tenantID, "Alice", "$2a$10$3H9DLiHyPxJ29bMWRNyueOrGkbzJfE3BAR159ju3UetytAoKk7Ne2", false, false}...)
+	mock.ExpectQuery(sqlSelectSql).WithArgs("Alice").WillReturnRows(rows)
+	credential, err := tc.GetCredential(context.TODO(), "Alice")
+	if err != nil {
+		t.Fatalf("unexpected error:%s", err)
+	}
+
+	if credential.Username != "Alice" {
+		t.Fatalf("unexpected username:%s", credential.Username)
+	}
+	if credential.EncryptedPassword != "$2a$10$3H9DLiHyPxJ29bMWRNyueOrGkbzJfE3BAR159ju3UetytAoKk7Ne2" {
+		t.Fatalf("unexpected password:%s", credential.EncryptedPassword)
+	}
+}
+
+func TestCreateCredential(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("an error '%s' was not expected when opening a stub database connection", err)
+	}
+	defer db.Close()
+	sqlxDB := sqlx.NewDb(db, "sqlmock")
+	tc := TableCatalog{
+		DB: sqlxDB,
+	}
+
+	// mock select failure
+	mock.ExpectExec("insert").WillReturnError(errors.New("insert error"))
+	credential := &model.Credential{
+		Username:          "Alice",
+		EncryptedPassword: "$2a$10$3H9DLiHyPxJ29bMWRNyueOrGkbzJfE3BAR159ju3UetytAoKk7Ne2",
+	}
+	err = tc.CreateCredential(context.TODO(), credential)
+	if !strings.Contains(err.Error(), "insert error") {
+		t.Fatalf("unexpected error:%s", err)
+	}
+
+	// now we execute our request
+	mock.ExpectExec("insert into credential_users").WillReturnResult(sqlmock.NewResult(1, 1))
+	err = tc.CreateCredential(context.TODO(), credential)
+	if err != nil {
+		t.Fatalf("unexpected error:%s", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("there were unfulfilled expectations: %s", err)
+	}
+}
+
+func TestDropCredential(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("an error '%s' was not expected when opening a stub database connection", err)
+	}
+	defer db.Close()
+	sqlxDB := sqlx.NewDb(db, "sqlmock")
+	tc := TableCatalog{
+		DB: sqlxDB,
+	}
+
+	// mock select failure
+	mock.ExpectExec("update").WillReturnError(errors.New("update error"))
+	err = tc.DropCredential(context.TODO(), "Alice")
+	if !strings.Contains(err.Error(), "update error") {
+		t.Fatalf("unexpected error:%s", err)
+	}
+
+	// now we execute our request
+	mock.ExpectExec("update credential_users").WillReturnResult(sqlmock.NewResult(1, 1))
+	err = tc.DropCredential(context.TODO(), "Alice")
+	if err != nil {
+		t.Fatalf("unexpected error:%s", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("there were unfulfilled expectations: %s", err)
+	}
+}
+
+func TestListCredentials(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to open sqlmock database: %s", err)
+	}
+	defer db.Close()
+	sqlxDB := sqlx.NewDb(db, "sqlmock")
+	tc := TableCatalog{
+		DB: sqlxDB,
+	}
+
+	sqlSelectSql := "select"
+
+	// mock select failure
+	mock.ExpectQuery(sqlSelectSql).WillReturnError(errors.New("select error"))
+	_, err = tc.ListCredentials(context.TODO())
+	if !strings.Contains(err.Error(), "select error") {
+		t.Fatalf("unexpected error:%s", err)
+	}
+
+	// mock select normal
+	rows := sqlmock.NewRows(
+		[]string{"username"},
+	).AddRow("Alice").AddRow("Bob")
+	mock.ExpectQuery(sqlSelectSql).WillReturnRows(rows)
+	res, err := tc.ListCredentials(context.TODO())
+	if err != nil {
+		t.Fatalf("unexpected error:%s", err)
+	}
+
+	if len(res) != 2 {
+		t.Fatalf("unexpected result:%d", len(res))
+	}
+	for _, uname := range res {
+		if uname != "Alice" && uname != "Bob" {
+			t.Fatalf("unexpected username:%s", uname)
+		}
+	}
+}

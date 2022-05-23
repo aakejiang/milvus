@@ -636,13 +636,13 @@ func (tc *TableCatalog) ListAliases(ctx context.Context) ([]*model.Collection, e
 
 func (tc *TableCatalog) GetCredential(ctx context.Context, username string) (*model.Credential, error) {
 	sqlStr := "select tenant_id, username, encrypted_password, is_super, is_deleted from credential_users where is_deleted=false and username=?"
-	var user *User
+	var user User
 	err := tc.DB.Get(&user, sqlStr, username)
 	if err != nil {
 		log.Error("get credential user by username failed", zap.Error(err))
 		return nil, err
 	}
-	return ConvertUserDBToModel(user), nil
+	return ConvertUserDBToModel(&user), nil
 }
 
 func (tc *TableCatalog) CreateCredential(ctx context.Context, credential *model.Credential) error {
