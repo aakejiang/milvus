@@ -19,7 +19,7 @@ type TableCatalog struct {
 }
 
 func (tc *TableCatalog) CreateCollection(ctx context.Context, collection *model.Collection, ts typeutil.Timestamp) error {
-	err := WithTransaction(tc.DB, func(tx Transaction) error {
+	return WithTransaction(tc.DB, func(tx Transaction) error {
 		// sql 1
 		sqlStr1 := "insert into collections(tenant_id, collection_id, collection_name, collection_alias, description, auto_id, ts, properties) values (?,?,?,?,?,?,?)"
 		aliasesBytes, err := json.Marshal(collection.Aliases)
@@ -115,8 +115,6 @@ func (tc *TableCatalog) CreateCollection(ctx context.Context, collection *model.
 
 		return nil
 	})
-
-	return err
 }
 
 func (tc *TableCatalog) GetCollectionByID(ctx context.Context, collectionID typeutil.UniqueID, ts typeutil.Timestamp) (*model.Collection, error) {
@@ -211,7 +209,7 @@ func (tc *TableCatalog) CollectionExists(ctx context.Context, collectionID typeu
 }
 
 func (tc *TableCatalog) DropCollection(ctx context.Context, collectionInfo *model.Collection, ts typeutil.Timestamp) error {
-	err := WithTransaction(tc.DB, func(tx Transaction) error {
+	return WithTransaction(tc.DB, func(tx Transaction) error {
 		// sql 1
 		sqlStr1 := "update collections set is_deleted=true where collection_id=?"
 		rs, err := tx.Exec(sqlStr1, collectionInfo.CollectionID)
@@ -307,8 +305,6 @@ func (tc *TableCatalog) DropCollection(ctx context.Context, collectionInfo *mode
 
 		return err
 	})
-
-	return err
 }
 
 func (tc *TableCatalog) CreatePartition(ctx context.Context, coll *model.Collection, ts typeutil.Timestamp) error {
@@ -352,7 +348,7 @@ func (tc *TableCatalog) DropPartition(ctx context.Context, collection *model.Col
 }
 
 func (tc *TableCatalog) CreateIndex(ctx context.Context, col *model.Collection, index *model.Index) error {
-	err := WithTransaction(tc.DB, func(tx Transaction) error {
+	return WithTransaction(tc.DB, func(tx Transaction) error {
 		// sql 1
 		sqlStr1 := "insert into indexes(collection_id, field_id, index_id, index_name, index_params) values (:collection_id, :field_id, :index_id, :index_name, :index_params)"
 		indexParamsBytes, err := json.Marshal(index.IndexParams)
@@ -404,8 +400,6 @@ func (tc *TableCatalog) CreateIndex(ctx context.Context, col *model.Collection, 
 
 		return nil
 	})
-
-	return err
 }
 
 func (tc *TableCatalog) AlterIndex(ctx context.Context, oldIndex *model.Index, newIndex *model.Index) error {
@@ -413,7 +407,7 @@ func (tc *TableCatalog) AlterIndex(ctx context.Context, oldIndex *model.Index, n
 }
 
 func (tc *TableCatalog) DropIndex(ctx context.Context, collectionInfo *model.Collection, dropIdxID typeutil.UniqueID, ts typeutil.Timestamp) error {
-	err := WithTransaction(tc.DB, func(tx Transaction) error {
+	return WithTransaction(tc.DB, func(tx Transaction) error {
 		// sql 1
 		sqlStr1 := "update indexes set is_deleted=true where index_id=?"
 		rs, err := tx.Exec(sqlStr1, dropIdxID)
@@ -444,8 +438,6 @@ func (tc *TableCatalog) DropIndex(ctx context.Context, collectionInfo *model.Col
 
 		return nil
 	})
-
-	return err
 }
 
 func (tc *TableCatalog) ListIndexes(ctx context.Context) ([]*model.Index, error) {
