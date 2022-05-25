@@ -21,6 +21,8 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/milvus-io/milvus/internal/proto/internalpb"
+
 	"github.com/bits-and-blooms/bloom/v3"
 	"github.com/stretchr/testify/assert"
 
@@ -30,6 +32,24 @@ import (
 	"github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/internal/util/flowgraph"
 )
+
+func getInsertNode() (*insertNode, error) {
+	streaming, err := genSimpleReplica()
+	if err != nil {
+		return nil, err
+	}
+
+	err = streaming.addSegment(defaultSegmentID,
+		defaultPartitionID,
+		defaultCollectionID,
+		defaultDMLChannel,
+		segmentTypeGrowing)
+	if err != nil {
+		return nil, err
+	}
+
+	return newInsertNode(streaming), nil
+}
 
 func genFlowGraphInsertData(schema *schemapb.CollectionSchema, numRows int) (*insertData, error) {
 	insertMsg, err := genSimpleInsertMsg(schema, numRows)
@@ -76,51 +96,34 @@ func genFlowGraphDeleteData() (*deleteData, error) {
 }
 
 func TestFlowGraphInsertNode_insert(t *testing.T) {
+	pkType := schemapb.DataType_Int64
+	schema := genTestCollectionSchema(pkType)
+
 	t.Run("test insert", func(t *testing.T) {
-		streaming, err := genSimpleReplica()
-		assert.NoError(t, err)
-		insertNode := newInsertNode(streaming)
-
-		err = streaming.addSegment(defaultSegmentID,
-			defaultPartitionID,
-			defaultCollectionID,
-			defaultDMLChannel,
-			segmentTypeGrowing,
-			true)
+		insertNode, err := getInsertNode()
 		assert.NoError(t, err)
 
-		collection, err := streaming.getCollectionByID(defaultCollectionID)
-		assert.NoError(t, err)
-		insertData, err := genFlowGraphInsertData(collection.schema, defaultMsgLength)
+		insertData, err := genFlowGraphInsertData(schema, defaultMsgLength)
 		assert.NoError(t, err)
 
 		wg := &sync.WaitGroup{}
 		wg.Add(1)
-		insertNode.insert(insertData, defaultSegmentID, wg)
+		err = insertNode.insert(insertData, defaultSegmentID, wg)
+		assert.NoError(t, err)
 	})
 
 	t.Run("test segment insert error", func(t *testing.T) {
-		streaming, err := genSimpleReplica()
-		assert.NoError(t, err)
-		insertNode := newInsertNode(streaming)
-
-		err = streaming.addSegment(defaultSegmentID,
-			defaultPartitionID,
-			defaultCollectionID,
-			defaultDMLChannel,
-			segmentTypeGrowing,
-			true)
+		insertNode, err := getInsertNode()
 		assert.NoError(t, err)
 
-		collection, err := streaming.getCollectionByID(defaultCollectionID)
-		assert.NoError(t, err)
-		insertData, err := genFlowGraphInsertData(collection.schema, defaultMsgLength)
+		insertData, err := genFlowGraphInsertData(schema, defaultMsgLength)
 		assert.NoError(t, err)
 
 		wg := &sync.WaitGroup{}
 		wg.Add(1)
 		insertData.insertRecords[defaultSegmentID] = insertData.insertRecords[defaultSegmentID][:len(insertData.insertRecords[defaultSegmentID])/2]
-		insertNode.insert(insertData, defaultSegmentID, wg)
+		err = insertNode.insert(insertData, defaultSegmentID, wg)
+		assert.Error(t, err)
 	})
 
 	t.Run("test no target segment", func(t *testing.T) {
@@ -129,88 +132,65 @@ func TestFlowGraphInsertNode_insert(t *testing.T) {
 		insertNode := newInsertNode(streaming)
 		wg := &sync.WaitGroup{}
 		wg.Add(1)
-		insertNode.insert(nil, defaultSegmentID, wg)
+		err = insertNode.insert(nil, defaultSegmentID, wg)
+		assert.Error(t, err)
 	})
 
 	t.Run("test invalid segmentType", func(t *testing.T) {
-		streaming, err := genSimpleReplica()
+		insertNode, err := getInsertNode()
 		assert.NoError(t, err)
-		insertNode := newInsertNode(streaming)
 
-		err = streaming.addSegment(defaultSegmentID,
-			defaultPartitionID,
-			defaultCollectionID,
-			defaultDMLChannel,
-			segmentTypeSealed,
-			true)
+		insertData, err := genFlowGraphInsertData(schema, defaultMsgLength)
 		assert.NoError(t, err)
+
+		seg, err := insertNode.streamingReplica.getSegmentByID(defaultSegmentID)
+		assert.NoError(t, err)
+		seg.setType(segmentTypeSealed)
 
 		wg := &sync.WaitGroup{}
 		wg.Add(1)
-		insertNode.insert(nil, defaultSegmentID, wg)
+		err = insertNode.insert(insertData, defaultSegmentID, wg)
+		assert.Error(t, err)
 	})
 }
 
 func TestFlowGraphInsertNode_delete(t *testing.T) {
+	pkType := schemapb.DataType_Int64
+	schema := genTestCollectionSchema(pkType)
+
 	t.Run("test insert and delete", func(t *testing.T) {
-		streaming, err := genSimpleReplica()
-		assert.NoError(t, err)
-		insertNode := newInsertNode(streaming)
-
-		err = streaming.addSegment(defaultSegmentID,
-			defaultPartitionID,
-			defaultCollectionID,
-			defaultDMLChannel,
-			segmentTypeGrowing,
-			true)
+		insertNode, err := getInsertNode()
 		assert.NoError(t, err)
 
-		collection, err := streaming.getCollectionByID(defaultCollectionID)
-		assert.NoError(t, err)
-		insertData, err := genFlowGraphInsertData(collection.schema, defaultMsgLength)
+		insertData, err := genFlowGraphInsertData(schema, defaultMsgLength)
 		assert.NoError(t, err)
 
 		wg := &sync.WaitGroup{}
 		wg.Add(1)
-		insertNode.insert(insertData, defaultSegmentID, wg)
+		err = insertNode.insert(insertData, defaultSegmentID, wg)
+		assert.NoError(t, err)
 
 		deleteData, err := genFlowGraphDeleteData()
 		assert.NoError(t, err)
 		wg.Add(1)
-		insertNode.delete(deleteData, defaultSegmentID, wg)
+		err = insertNode.delete(deleteData, defaultSegmentID, wg)
+		assert.NoError(t, err)
 	})
 
 	t.Run("test only delete", func(t *testing.T) {
-		streaming, err := genSimpleReplica()
-		assert.NoError(t, err)
-		insertNode := newInsertNode(streaming)
-
-		err = streaming.addSegment(defaultSegmentID,
-			defaultPartitionID,
-			defaultCollectionID,
-			defaultDMLChannel,
-			segmentTypeGrowing,
-			true)
+		insertNode, err := getInsertNode()
 		assert.NoError(t, err)
 
 		deleteData, err := genFlowGraphDeleteData()
 		assert.NoError(t, err)
 		wg := &sync.WaitGroup{}
 		wg.Add(1)
-		insertNode.delete(deleteData, defaultSegmentID, wg)
+		err = insertNode.delete(deleteData, defaultSegmentID, wg)
+		assert.NoError(t, err)
 	})
 
 	t.Run("test segment delete error", func(t *testing.T) {
-		streaming, err := genSimpleReplica()
-		assert.NoError(t, err)
-		insertNode := newInsertNode(streaming)
-
-		err = streaming.addSegment(defaultSegmentID,
-			defaultPartitionID,
-			defaultCollectionID,
-			defaultDMLChannel,
-			segmentTypeGrowing,
-			true)
+		insertNode, err := getInsertNode()
 		assert.NoError(t, err)
 
 		deleteData, err := genFlowGraphDeleteData()
@@ -218,7 +198,8 @@ func TestFlowGraphInsertNode_delete(t *testing.T) {
 		wg := &sync.WaitGroup{}
 		wg.Add(1)
 		deleteData.deleteTimestamps[defaultSegmentID] = deleteData.deleteTimestamps[defaultSegmentID][:len(deleteData.deleteTimestamps)/2]
-		insertNode.delete(deleteData, defaultSegmentID, wg)
+		err = insertNode.delete(deleteData, defaultSegmentID, wg)
+		assert.Error(t, err)
 	})
 
 	t.Run("test no target segment", func(t *testing.T) {
@@ -227,28 +208,49 @@ func TestFlowGraphInsertNode_delete(t *testing.T) {
 		insertNode := newInsertNode(streaming)
 		wg := &sync.WaitGroup{}
 		wg.Add(1)
-		insertNode.delete(nil, defaultSegmentID, wg)
+		err = insertNode.delete(nil, defaultSegmentID, wg)
+		assert.Error(t, err)
+	})
+}
+
+func TestFlowGraphInsertNode_processDeleteMessages(t *testing.T) {
+	t.Run("test processDeleteMessages", func(t *testing.T) {
+		streaming, err := genSimpleReplica()
+		assert.NoError(t, err)
+
+		dMsg := genDeleteMsg(defaultCollectionID, schemapb.DataType_Int64, defaultDelLength)
+		dData, err := genFlowGraphDeleteData()
+		assert.NoError(t, err)
+
+		err = processDeleteMessages(streaming, dMsg, dData)
+		assert.NoError(t, err)
+	})
+
+	t.Run("test processDeleteMessages", func(t *testing.T) {
+		streaming, err := genSimpleReplica()
+		assert.NoError(t, err)
+
+		dMsg := genDeleteMsg(defaultCollectionID, schemapb.DataType_Int64, defaultDelLength)
+		dData, err := genFlowGraphDeleteData()
+		assert.NoError(t, err)
+
+		err = processDeleteMessages(streaming, dMsg, dData)
+		assert.NoError(t, err)
 	})
 }
 
 func TestFlowGraphInsertNode_operate(t *testing.T) {
-	t.Run("test operate", func(t *testing.T) {
-		streaming, err := genSimpleReplica()
-		assert.NoError(t, err)
-		insertNode := newInsertNode(streaming)
+	pkType := schemapb.DataType_Int64
+	schema := genTestCollectionSchema(pkType)
 
-		err = streaming.addSegment(defaultSegmentID,
-			defaultPartitionID,
-			defaultCollectionID,
-			defaultDMLChannel,
-			segmentTypeGrowing,
-			true)
+	genMsgStreamInsertMsg := func() *msgstream.InsertMsg {
+		iMsg, err := genSimpleInsertMsg(schema, defaultMsgLength)
 		assert.NoError(t, err)
+		return iMsg
+	}
 
-		collection, err := streaming.getCollectionByID(defaultCollectionID)
-		assert.NoError(t, err)
-		msgInsertMsg, err := genSimpleInsertMsg(collection.schema, defaultMsgLength)
-		assert.NoError(t, err)
+	genInsertMsg := func() *insertMsg {
+		msgInsertMsg := genMsgStreamInsertMsg()
 		msgDeleteMsg := genDeleteMsg(defaultCollectionID, schemapb.DataType_Int64, defaultDelLength)
 		iMsg := insertMsg{
 			insertMessages: []*msgstream.InsertMsg{
@@ -258,29 +260,26 @@ func TestFlowGraphInsertNode_operate(t *testing.T) {
 				msgDeleteMsg,
 			},
 		}
-		msg := []flowgraph.Msg{&iMsg}
+		return &iMsg
+	}
+
+	t.Run("test operate", func(t *testing.T) {
+		insertNode, err := getInsertNode()
+		assert.NoError(t, err)
+
+		msg := []flowgraph.Msg{genInsertMsg()}
 		insertNode.Operate(msg)
-		s, err := streaming.getSegmentByID(defaultSegmentID)
+		s, err := insertNode.streamingReplica.getSegmentByID(defaultSegmentID)
 		assert.Nil(t, err)
 		buf := make([]byte, 8)
 		for i := 0; i < defaultMsgLength; i++ {
 			common.Endian.PutUint64(buf, uint64(i))
 			assert.True(t, s.pkFilter.Test(buf))
 		}
-
 	})
 
 	t.Run("test invalid partitionID", func(t *testing.T) {
-		streaming, err := genSimpleReplica()
-		assert.NoError(t, err)
-		insertNode := newInsertNode(streaming)
-
-		err = streaming.addSegment(defaultSegmentID,
-			defaultPartitionID,
-			defaultCollectionID,
-			defaultDMLChannel,
-			segmentTypeGrowing,
-			true)
+		insertNode, err := getInsertNode()
 		assert.NoError(t, err)
 
 		msgDeleteMsg := genDeleteMsg(defaultCollectionID, schemapb.DataType_Int64, defaultDelLength)
@@ -296,16 +295,7 @@ func TestFlowGraphInsertNode_operate(t *testing.T) {
 	})
 
 	t.Run("test collection partition not exist", func(t *testing.T) {
-		streaming, err := genSimpleReplica()
-		assert.NoError(t, err)
-		insertNode := newInsertNode(streaming)
-
-		err = streaming.addSegment(defaultSegmentID,
-			defaultPartitionID,
-			defaultCollectionID,
-			defaultDMLChannel,
-			segmentTypeGrowing,
-			true)
+		insertNode, err := getInsertNode()
 		assert.NoError(t, err)
 
 		msgDeleteMsg := genDeleteMsg(defaultCollectionID, schemapb.DataType_Int64, defaultDelLength)
@@ -318,20 +308,13 @@ func TestFlowGraphInsertNode_operate(t *testing.T) {
 			},
 		}
 		msg := []flowgraph.Msg{&iMsg}
-		insertNode.Operate(msg)
+		assert.Panics(t, func() {
+			insertNode.Operate(msg)
+		})
 	})
 
 	t.Run("test partition not exist", func(t *testing.T) {
-		streaming, err := genSimpleReplica()
-		assert.NoError(t, err)
-		insertNode := newInsertNode(streaming)
-
-		err = streaming.addSegment(defaultSegmentID,
-			defaultPartitionID,
-			defaultCollectionID,
-			defaultDMLChannel,
-			segmentTypeGrowing,
-			true)
+		insertNode, err := getInsertNode()
 		assert.NoError(t, err)
 
 		msgDeleteMsg := genDeleteMsg(defaultCollectionID, schemapb.DataType_Int64, defaultDelLength)
@@ -343,37 +326,63 @@ func TestFlowGraphInsertNode_operate(t *testing.T) {
 			},
 		}
 		msg := []flowgraph.Msg{&iMsg}
-		insertNode.Operate(msg)
+		assert.Panics(t, func() {
+			insertNode.Operate(msg)
+		})
 	})
 
 	t.Run("test invalid input length", func(t *testing.T) {
+		insertNode, err := getInsertNode()
+		assert.NoError(t, err)
+		msg := []flowgraph.Msg{genInsertMsg(), genInsertMsg()}
+		insertNode.Operate(msg)
+	})
+
+	t.Run("test getCollectionByID failed", func(t *testing.T) {
 		streaming, err := genSimpleReplica()
 		assert.NoError(t, err)
 		insertNode := newInsertNode(streaming)
 
-		err = streaming.addSegment(defaultSegmentID,
-			defaultPartitionID,
-			defaultCollectionID,
-			defaultDMLChannel,
-			segmentTypeGrowing,
-			true)
+		msg := []flowgraph.Msg{genInsertMsg()}
+
+		err = insertNode.streamingReplica.removeCollection(defaultCollectionID)
+		assert.NoError(t, err)
+		assert.Panics(t, func() {
+			insertNode.Operate(msg)
+		})
+	})
+
+	t.Run("test TransferInsertMsgToInsertRecord failed", func(t *testing.T) {
+		insertNode, err := getInsertNode()
 		assert.NoError(t, err)
 
-		collection, err := streaming.getCollectionByID(defaultCollectionID)
+		col, err := insertNode.streamingReplica.getCollectionByID(defaultCollectionID)
 		assert.NoError(t, err)
-		msgInsertMsg, err := genSimpleInsertMsg(collection.schema, defaultMsgLength)
-		assert.NoError(t, err)
-		msgDeleteMsg := genDeleteMsg(defaultCollectionID, schemapb.DataType_Int64, defaultDelLength)
-		iMsg := insertMsg{
-			insertMessages: []*msgstream.InsertMsg{
-				msgInsertMsg,
-			},
-			deleteMessages: []*msgstream.DeleteMsg{
-				msgDeleteMsg,
-			},
+
+		for i, field := range col.schema.GetFields() {
+			if field.DataType == schemapb.DataType_FloatVector {
+				col.schema.Fields[i].TypeParams = nil
+			}
 		}
-		msg := []flowgraph.Msg{&iMsg, &iMsg}
-		insertNode.Operate(msg)
+
+		iMsg := genInsertMsg()
+		iMsg.insertMessages[0].Version = internalpb.InsertDataVersion_RowBased
+		msg := []flowgraph.Msg{iMsg}
+		assert.Panics(t, func() {
+			insertNode.Operate(msg)
+		})
+	})
+
+	t.Run("test getPrimaryKeys failed", func(t *testing.T) {
+		insertNode, err := getInsertNode()
+		assert.NoError(t, err)
+
+		iMsg := genInsertMsg()
+		iMsg.insertMessages[0].NumRows = 0
+		msg := []flowgraph.Msg{iMsg}
+		assert.Panics(t, func() {
+			insertNode.Operate(msg)
+		})
 	})
 }
 
@@ -405,7 +414,7 @@ func TestFilterSegmentsByPKs(t *testing.T) {
 		assert.Nil(t, err)
 		assert.Equal(t, len(pks), 0)
 		_, _, err = filterSegmentsByPKs(nil, timestamps, segment)
-		assert.NotNil(t, err)
+		assert.NoError(t, err)
 		_, _, err = filterSegmentsByPKs([]primaryKey{pk0, pk1, pk2, pk3, pk4}, timestamps, nil)
 		assert.NotNil(t, err)
 	})
@@ -435,7 +444,7 @@ func TestFilterSegmentsByPKs(t *testing.T) {
 		assert.Nil(t, err)
 		assert.Equal(t, len(pks), 0)
 		_, _, err = filterSegmentsByPKs(nil, timestamps, segment)
-		assert.NotNil(t, err)
+		assert.NoError(t, err)
 		_, _, err = filterSegmentsByPKs([]primaryKey{pk0, pk1, pk2, pk3, pk4}, timestamps, nil)
 		assert.NotNil(t, err)
 	})

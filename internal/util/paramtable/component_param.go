@@ -31,7 +31,8 @@ const (
 	DefaultRetentionDuration = 3600 * 24 * 5
 
 	// DefaultIndexSliceSize defines the default slice size of index file when serializing.
-	DefaultIndexSliceSize = 4
+	DefaultIndexSliceSize = 16
+	DefaultGracefulTime   = 5000 //ms
 )
 
 // ComponentParam is used to quickly and easily access all components' configurations.
@@ -124,9 +125,12 @@ type commonConfig struct {
 	RetentionDuration    int64
 	EntityExpirationTTL  time.Duration
 
-	SimdType        string
-	IndexSliceSize  int64
-	StorageType     string
+	IndexSliceSize int64
+	GracefulTime   int64
+
+	StorageType string
+	SimdType    string
+
 	MetaStorageType string
 
 	AuthorizationEnabled bool
@@ -164,6 +168,7 @@ func (p *commonConfig) init(base *BaseTable) {
 
 	p.initSimdType()
 	p.initIndexSliceSize()
+	p.initGracefulTime()
 	p.initStorageType()
 	p.initMetaStorageType()
 
@@ -365,6 +370,10 @@ func (p *commonConfig) initSimdType() {
 
 func (p *commonConfig) initIndexSliceSize() {
 	p.IndexSliceSize = p.Base.ParseInt64WithDefault("common.indexSliceSize", DefaultIndexSliceSize)
+}
+
+func (p *commonConfig) initGracefulTime() {
+	p.GracefulTime = p.Base.ParseInt64WithDefault("common.gracefulTime", DefaultGracefulTime)
 }
 
 func (p *commonConfig) initStorageType() {
@@ -694,8 +703,7 @@ type queryNodeConfig struct {
 	// stats
 	StatsPublishInterval int
 
-	GracefulTime int64
-	SliceIndex   int
+	SliceIndex int
 
 	// segcore
 	ChunkRows        int64
@@ -711,13 +719,18 @@ type queryNodeConfig struct {
 	// cache limit
 	CacheEnabled     bool
 	CacheMemoryLimit int64
+
+	GroupEnabled         bool
+	MaxReceiveChanSize   int32
+	MaxUnsolvedQueueSize int32
+	MaxGroupNQ           int64
+	TopKMergeRatio       float64
 }
 
 func (p *queryNodeConfig) init(base *BaseTable) {
 	p.Base = base
 	p.NodeID.Store(UniqueID(0))
 	p.initCacheSize()
-	p.initGracefulTime()
 
 	p.initFlowGraphMaxQueueLength()
 	p.initFlowGraphMaxParallelism()
@@ -734,6 +747,12 @@ func (p *queryNodeConfig) init(base *BaseTable) {
 
 	p.initCacheMemoryLimit()
 	p.initCacheEnabled()
+
+	p.initGroupEnabled()
+	p.initMaxReceiveChanSize()
+	p.initMaxUnsolvedQueueSize()
+	p.initMaxGroupNQ()
+	p.initTopKMergeRatio()
 }
 
 // InitAlias initializes an alias for the QueryNode role.
@@ -788,11 +807,6 @@ func (p *queryNodeConfig) initSearchPulsarBufSize() {
 
 func (p *queryNodeConfig) initSearchResultReceiveBufSize() {
 	p.SearchResultReceiveBufSize = p.Base.ParseInt64WithDefault("queryNode.msgStream.searchResult.recvBufSize", 64)
-}
-
-func (p *queryNodeConfig) initGracefulTime() {
-	p.GracefulTime = p.Base.ParseInt64("queryNode.gracefulTime")
-	log.Debug("query node init gracefulTime", zap.Any("gracefulTime", p.GracefulTime))
 }
 
 func (p *queryNodeConfig) initSmallIndexParams() {
@@ -850,6 +864,26 @@ func (p *queryNodeConfig) initCacheEnabled() {
 	if err != nil {
 		panic(err)
 	}
+}
+
+func (p *queryNodeConfig) initGroupEnabled() {
+	p.GroupEnabled = p.Base.ParseBool("queryNode.grouping.enabled", true)
+}
+
+func (p *queryNodeConfig) initMaxReceiveChanSize() {
+	p.MaxReceiveChanSize = p.Base.ParseInt32WithDefault("queryNode.grouping.receiveChanSize", 10240)
+}
+
+func (p *queryNodeConfig) initMaxUnsolvedQueueSize() {
+	p.MaxUnsolvedQueueSize = p.Base.ParseInt32WithDefault("queryNode.grouping.unsolvedQueueSize", 10240)
+}
+
+func (p *queryNodeConfig) initMaxGroupNQ() {
+	p.MaxGroupNQ = p.Base.ParseInt64WithDefault("queryNode.grouping.maxNQ", 1000)
+}
+
+func (p *queryNodeConfig) initTopKMergeRatio() {
+	p.TopKMergeRatio = p.Base.ParseFloatWithDefault("queryNode.grouping.topKMergeRatio", 10.0)
 }
 
 func (p *queryNodeConfig) SetNodeID(id UniqueID) {

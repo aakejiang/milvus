@@ -163,7 +163,6 @@ queryCoord:
 # Related configuration of queryNode, used to run hybrid search between vector and scalar data.
 queryNode:
   cacheSize: 32 # GB, default 32 GB, `cacheSize` is the memory used for caching data for faster query. The `cacheSize` must be less than system memory size.
-  gracefulTime: 0 # Minimum time before the newly inserted data can be searched (in ms)
   port: 21123
 
   stats:
@@ -189,6 +188,14 @@ queryNode:
   cache:
     enabled: true
     memoryLimit: 2147483648 # 2 GB, 2 * 1024 *1024 *1024
+
+  grouping:
+    enabled: true
+    receiveChanSize: 10240
+    unsolvedQueueSize: 10240
+    maxNQ: 1000
+    topKMergeRatio: 10.0
+
 
 
 indexCoord:
@@ -232,7 +239,7 @@ dataNode:
 
 # Configures the system log output.
 log:
-  level: info # Only supports debug, info, warn, error, panic, or fatal. Default 'info'.
+  level: debug # Only supports debug, info, warn, error, panic, or fatal. Default 'info'.
   file:
     # please adjust in embedded Milvus: /tmp/milvus/logs
     rootPath: "" # default to stdout, stderr
@@ -293,12 +300,13 @@ common:
   retentionDuration: 432000 # 5 days in seconds
   entityExpiration:  -1     # Entity expiration in seconds, CAUTION make sure entityExpiration >= retentionDuration and -1 means never expire
 
+  gracefulTime: 5000 # milliseconds. it represents the interval (in ms) by which the request arrival time needs to be subtracted in the case of Bounded Consistency.
 
   # Default value: auto
   # Valid values: [auto, avx512, avx2, avx, sse4_2]
   # This configuration is only used by querynode and indexnode, it selects CPU instruction set for Searching and Index-building.
   simdType: auto
-  indexSliceSize: 4 # MB
+  indexSliceSize: 16 # MB
 
   # please adjust in embedded Milvus: local
   storageType: minio

@@ -7,7 +7,6 @@ import (
 	"regexp"
 	"strconv"
 	"sync"
-	"time"
 
 	"github.com/milvus-io/milvus/internal/parser/planparserv2"
 
@@ -57,6 +56,7 @@ type searchTask struct {
 
 func (t *searchTask) PreExecute(ctx context.Context) error {
 	sp, ctx := trace.StartSpanFromContextWithOperationName(t.TraceCtx(), "Proxy-Search-PreExecute")
+	defer sp.Finish()
 
 	if t.getQueryNodePolicy == nil {
 		t.getQueryNodePolicy = defaultGetQueryNodePolicy
@@ -66,7 +66,6 @@ func (t *searchTask) PreExecute(ctx context.Context) error {
 		t.searchShardPolicy = roundRobinPolicy
 	}
 
-	defer sp.Finish()
 	t.Base.MsgType = commonpb.MsgType_Search
 	t.Base.SourceID = Params.ProxyCfg.GetNodeID()
 
@@ -223,25 +222,30 @@ func (t *searchTask) PreExecute(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+
+		t.SearchRequest.Topk = int64(topK)
+		err = validateTopK(int64(topK))
+		if err != nil {
+			return err
+		}
 		log.Debug("Proxy::searchTask::PreExecute", zap.Any("plan.OutputFieldIds", plan.OutputFieldIds),
 			zap.Any("plan", plan.String()))
 	}
+
 	travelTimestamp := t.request.TravelTimestamp
 	if travelTimestamp == 0 {
-		travelTimestamp = t.BeginTs()
-	} else {
-		durationSeconds := tsoutil.CalculateDuration(t.BeginTs(), travelTimestamp) / 1000
-		if durationSeconds > Params.CommonCfg.RetentionDuration {
-			duration := time.Second * time.Duration(durationSeconds)
-			return fmt.Errorf("only support to travel back to %s so far", duration.String())
-		}
+		travelTimestamp = typeutil.MaxTimestamp
 	}
-	guaranteeTimestamp := t.request.GuaranteeTimestamp
-	if guaranteeTimestamp == 0 {
-		guaranteeTimestamp = t.BeginTs()
+	err = validateTravelTimestamp(travelTimestamp, t.BeginTs())
+	if err != nil {
+		return err
 	}
-	t.TravelTimestamp = travelTimestamp
-	t.GuaranteeTimestamp = guaranteeTimestamp
+	t.SearchRequest.TravelTimestamp = travelTimestamp
+
+	guaranteeTs := t.request.GetGuaranteeTimestamp()
+	guaranteeTs = parseGuaranteeTs(guaranteeTs, t.BeginTs())
+	t.SearchRequest.GuaranteeTimestamp = guaranteeTs
+
 	deadline, ok := t.TraceCtx().Deadline()
 	if ok {
 		t.SearchRequest.TimeoutTimestamp = tsoutil.ComposeTSByTime(deadline, 0)
@@ -250,7 +254,17 @@ func (t *searchTask) PreExecute(ctx context.Context) error {
 	t.DbID = 0 // todo
 	t.SearchRequest.Dsl = t.request.Dsl
 	t.SearchRequest.PlaceholderGroup = t.request.PlaceholderGroup
-
+	if t.request.GetNq() == 0 {
+		x := &commonpb.PlaceholderGroup{}
+		err := proto.Unmarshal(t.request.GetPlaceholderGroup(), x)
+		if err != nil {
+			return err
+		}
+		for _, h := range x.GetPlaceholders() {
+			t.request.Nq += int64(len(h.Values))
+		}
+	}
+	t.SearchRequest.Nq = t.request.GetNq()
 	log.Info("search PreExecute done.",
 		zap.Any("requestID", t.Base.MsgID), zap.Any("requestType", "search"))
 	return nil
@@ -404,9 +418,9 @@ func (t *searchTask) searchShard(ctx context.Context, leaders []queryNode, chann
 
 	search := func(nodeID UniqueID, qn types.QueryNode) error {
 		req := &querypb.SearchRequest{
-			Req:           t.SearchRequest,
-			IsShardLeader: true,
-			DmlChannel:    channelID,
+			Req:        t.SearchRequest,
+			DmlChannel: channelID,
+			Scope:      querypb.DataScope_All,
 		}
 
 		result, err := qn.Search(ctx, req)
