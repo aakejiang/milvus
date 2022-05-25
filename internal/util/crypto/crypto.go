@@ -11,7 +11,7 @@ import (
 
 // PasswordEncrypt encrypt password
 func PasswordEncrypt(pwd string) (string, error) {
-	bytes, err := bcrypt.GenerateFromPassword([]byte(pwd), bcrypt.DefaultCost)
+	bytes, err := bcrypt.GenerateFromPassword([]byte(pwd), bcrypt.MinCost)
 	if err != nil {
 		return "", err
 	}
