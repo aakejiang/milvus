@@ -146,14 +146,75 @@ func TestCreateCollection(t *testing.T) {
 	}
 }
 
-// a failing test case
-func TestCreateCollection_RollbackOnFailure(t *testing.T) {
+func TestCreateCollection_RollbackOnFailure1(t *testing.T) {
+	mock, tc := getMock(t)
+	defer tc.DB.Close()
+
+	mock.ExpectBegin()
+	mock.ExpectExec("insert into collections").WillReturnError(fmt.Errorf("insert error"))
+	mock.ExpectRollback()
+
+	// now we execute our method
+	if err := tc.CreateCollection(context.TODO(), collInfo, ts); err == nil {
+		t.Errorf("was expecting an error, but there was none")
+	}
+
+	// we make sure that all expectations were met
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("there were unfulfilled expectations: %s", err)
+	}
+}
+
+func TestCreateCollection_RollbackOnFailure2(t *testing.T) {
 	mock, tc := getMock(t)
 	defer tc.DB.Close()
 
 	mock.ExpectBegin()
 	mock.ExpectExec("insert into collections").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec("insert into field_schemas").WillReturnError(fmt.Errorf("insert error"))
+	mock.ExpectRollback()
+
+	// now we execute our method
+	if err := tc.CreateCollection(context.TODO(), collInfo, ts); err == nil {
+		t.Errorf("was expecting an error, but there was none")
+	}
+
+	// we make sure that all expectations were met
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("there were unfulfilled expectations: %s", err)
+	}
+}
+
+func TestCreateCollection_RollbackOnFailure3(t *testing.T) {
+	mock, tc := getMock(t)
+	defer tc.DB.Close()
+
+	mock.ExpectBegin()
+	mock.ExpectExec("insert into collections").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("insert into field_schemas").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("insert into partitions").WillReturnError(fmt.Errorf("insert error"))
+	mock.ExpectRollback()
+
+	// now we execute our method
+	if err := tc.CreateCollection(context.TODO(), collInfo, ts); err == nil {
+		t.Errorf("was expecting an error, but there was none")
+	}
+
+	// we make sure that all expectations were met
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("there were unfulfilled expectations: %s", err)
+	}
+}
+
+func TestCreateCollection_RollbackOnFailure4(t *testing.T) {
+	mock, tc := getMock(t)
+	defer tc.DB.Close()
+
+	mock.ExpectBegin()
+	mock.ExpectExec("insert into collections").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("insert into field_schemas").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("insert into partitions").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("insert into dd_msg_send").WillReturnError(fmt.Errorf("insert error"))
 	mock.ExpectRollback()
 
 	// now we execute our method
@@ -356,11 +417,11 @@ func TestDropCollection(t *testing.T) {
 	collInfo.Extra = meta
 
 	mock.ExpectBegin()
-	mock.ExpectExec("update collections").WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectExec("update partitions").WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectExec("update field_schemas").WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectExec("update indexes").WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectExec("update segment_indexes").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("update collections").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("update partitions").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("update field_schemas").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("update indexes").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("update segment_indexes").WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("insert into dd_msg_send").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 
@@ -375,39 +436,173 @@ func TestDropCollection(t *testing.T) {
 	}
 }
 
-// a failing test case
-func TestDropCollection_RollbackOnFailure(t *testing.T) {
+func TestDropCollection_RollbackOnFailure1(t *testing.T) {
 	mock, tc := getMock(t)
 	defer tc.DB.Close()
 
-	ddOpStr, _ := metastore.EncodeDdOperation(&internalpb.CreateCollectionRequest{
-		CollectionName: collName,
-		PartitionName:  partName,
-		CollectionID:   collID,
-		PartitionID:    partID,
-	}, "DropCollection")
-	meta := map[string]string{}
-	meta[metastore.DDMsgSendPrefix] = "false"
-	meta[metastore.DDOperationPrefix] = ddOpStr
-	collInfo.Extra = meta
+	sql := "update collections"
 
 	mock.ExpectBegin()
-	mock.ExpectExec("update collections").WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectExec("update partitions").WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectExec("update field_schemas").WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectExec("update indexes").WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectExec("update segment_indexes").WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectExec("insert into dd_msg_send").WillReturnError(fmt.Errorf("insert error"))
+	mock.ExpectExec(sql).WillReturnError(fmt.Errorf("update error"))
 	mock.ExpectRollback()
-
 	// now we execute our method
 	if err := tc.DropCollection(context.TODO(), collInfo, ts); err == nil {
 		t.Errorf("was expecting an error, but there was none")
 	}
 
-	// we make sure that all expectations were met
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Errorf("there were unfulfilled expectations: %s", err)
+	errMsg := "get sql RowsAffected failed"
+	mock.ExpectBegin()
+	mock.ExpectExec(sql).WillReturnResult(sqlmock.NewErrorResult(errors.New(errMsg)))
+	mock.ExpectRollback()
+	// mock sql result error
+	err := tc.DropCollection(context.TODO(), collInfo, ts)
+	if !strings.Contains(err.Error(), errMsg) {
+		t.Fatalf("unexpected error:%s", err)
+	}
+}
+
+func TestDropCollection_RollbackOnFailure2(t *testing.T) {
+	mock, tc := getMock(t)
+	defer tc.DB.Close()
+
+	mock.ExpectBegin()
+	mock.ExpectExec("update collections").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("update partitions").WillReturnError(fmt.Errorf("update error"))
+	mock.ExpectRollback()
+	// now we execute our method
+	if err := tc.DropCollection(context.TODO(), collInfo, ts); err == nil {
+		t.Errorf("was expecting an error, but there was none")
+	}
+
+	errMsg := "get sql RowsAffected failed"
+	mock.ExpectBegin()
+	mock.ExpectExec("update collections").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("update partitions").WillReturnResult(sqlmock.NewErrorResult(errors.New(errMsg)))
+	mock.ExpectRollback()
+	// mock sql result error
+	err := tc.DropCollection(context.TODO(), collInfo, ts)
+	if !strings.Contains(err.Error(), errMsg) {
+		t.Fatalf("unexpected error:%s", err)
+	}
+}
+
+func TestDropCollection_RollbackOnFailure3(t *testing.T) {
+	mock, tc := getMock(t)
+	defer tc.DB.Close()
+
+	mock.ExpectBegin()
+	mock.ExpectExec("update collections").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("update partitions").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("update field_schemas").WillReturnError(fmt.Errorf("update error"))
+	mock.ExpectRollback()
+	// now we execute our method
+	if err := tc.DropCollection(context.TODO(), collInfo, ts); err == nil {
+		t.Errorf("was expecting an error, but there was none")
+	}
+
+	errMsg := "get sql RowsAffected failed"
+	mock.ExpectBegin()
+	mock.ExpectExec("update collections").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("update partitions").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("update field_schemas").WillReturnResult(sqlmock.NewErrorResult(errors.New(errMsg)))
+	mock.ExpectRollback()
+	// mock sql result error
+	err := tc.DropCollection(context.TODO(), collInfo, ts)
+	if !strings.Contains(err.Error(), errMsg) {
+		t.Fatalf("unexpected error:%s", err)
+	}
+}
+
+func TestDropCollection_RollbackOnFailure4(t *testing.T) {
+	mock, tc := getMock(t)
+	defer tc.DB.Close()
+
+	mock.ExpectBegin()
+	mock.ExpectExec("update collections").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("update partitions").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("update field_schemas").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("update indexes").WillReturnError(fmt.Errorf("update error"))
+	mock.ExpectRollback()
+	// now we execute our method
+	if err := tc.DropCollection(context.TODO(), collInfo, ts); err == nil {
+		t.Errorf("was expecting an error, but there was none")
+	}
+
+	errMsg := "get sql RowsAffected failed"
+	mock.ExpectBegin()
+	mock.ExpectExec("update collections").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("update partitions").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("update field_schemas").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("update indexes").WillReturnResult(sqlmock.NewErrorResult(errors.New(errMsg)))
+	mock.ExpectRollback()
+	// mock sql result error
+	err := tc.DropCollection(context.TODO(), collInfo, ts)
+	if !strings.Contains(err.Error(), errMsg) {
+		t.Fatalf("unexpected error:%s", err)
+	}
+}
+
+func TestDropCollection_RollbackOnFailure5(t *testing.T) {
+	mock, tc := getMock(t)
+	defer tc.DB.Close()
+
+	mock.ExpectBegin()
+	mock.ExpectExec("update collections").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("update partitions").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("update field_schemas").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("update indexes").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("update segment_indexes").WillReturnError(fmt.Errorf("update error"))
+	mock.ExpectRollback()
+	// now we execute our method
+	if err := tc.DropCollection(context.TODO(), collInfo, ts); err == nil {
+		t.Errorf("was expecting an error, but there was none")
+	}
+
+	errMsg := "get sql RowsAffected failed"
+	mock.ExpectBegin()
+	mock.ExpectExec("update collections").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("update partitions").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("update field_schemas").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("update indexes").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("update segment_indexes").WillReturnResult(sqlmock.NewErrorResult(errors.New(errMsg)))
+	mock.ExpectRollback()
+	// mock sql result error
+	err := tc.DropCollection(context.TODO(), collInfo, ts)
+	if !strings.Contains(err.Error(), errMsg) {
+		t.Fatalf("unexpected error:%s", err)
+	}
+}
+
+func TestDropCollection_RollbackOnFailure6(t *testing.T) {
+	mock, tc := getMock(t)
+	defer tc.DB.Close()
+
+	mock.ExpectBegin()
+	mock.ExpectExec("update collections").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("update partitions").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("update field_schemas").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("update indexes").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("update segment_indexes").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("insert into dd_msg_send").WillReturnError(fmt.Errorf("insert error"))
+	mock.ExpectRollback()
+	// now we execute our method
+	if err := tc.DropCollection(context.TODO(), collInfo, ts); err == nil {
+		t.Errorf("was expecting an error, but there was none")
+	}
+
+	errMsg := "get sql RowsAffected failed"
+	mock.ExpectBegin()
+	mock.ExpectExec("update collections").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("update partitions").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("update field_schemas").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("update indexes").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("update segment_indexes").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("insert into dd_msg_send").WillReturnResult(sqlmock.NewErrorResult(errors.New(errMsg)))
+	mock.ExpectRollback()
+	// mock sql result error
+	err := tc.DropCollection(context.TODO(), collInfo, ts)
+	if !strings.Contains(err.Error(), errMsg) {
+		t.Fatalf("unexpected error:%s", err)
 	}
 }
 
@@ -504,6 +699,45 @@ func TestCreateIndex(t *testing.T) {
 	}
 }
 
+func TestCreateIndex_RollbackOnFailure1(t *testing.T) {
+	mock, tc := getMock(t)
+	defer tc.DB.Close()
+
+	mock.ExpectBegin()
+	mock.ExpectExec("insert into indexes").WillReturnError(fmt.Errorf("insert error"))
+	mock.ExpectRollback()
+
+	// now we execute our method
+	index := &model.Index{
+		FieldID:   fieldID,
+		IndexID:   indexID,
+		IndexName: indexName,
+	}
+	if err := tc.CreateIndex(context.TODO(), nil, index); err == nil {
+		t.Errorf("was expecting an error, but there was none")
+	}
+}
+
+func TestCreateIndex_RollbackOnFailure2(t *testing.T) {
+	mock, tc := getMock(t)
+	defer tc.DB.Close()
+
+	mock.ExpectBegin()
+	mock.ExpectExec("insert into indexes").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("insert into segment_indexes").WillReturnError(fmt.Errorf("insert error"))
+	mock.ExpectRollback()
+
+	// now we execute our method
+	index := &model.Index{
+		FieldID:   fieldID,
+		IndexID:   indexID,
+		IndexName: indexName,
+	}
+	if err := tc.CreateIndex(context.TODO(), nil, index); err == nil {
+		t.Errorf("was expecting an error, but there was none")
+	}
+}
+
 func TestDropIndex(t *testing.T) {
 	mock, tc := getMock(t)
 	defer tc.DB.Close()
@@ -524,23 +758,51 @@ func TestDropIndex(t *testing.T) {
 	}
 }
 
-func TestDropIndex_RollbackOnFailure(t *testing.T) {
+func TestDropIndex_RollbackOnFailure1(t *testing.T) {
 	mock, tc := getMock(t)
 	defer tc.DB.Close()
 
 	mock.ExpectBegin()
-	mock.ExpectExec("update indexes").WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectExec("update segment_indexes").WillReturnError(fmt.Errorf("delete error"))
+	mock.ExpectExec("update indexes").WillReturnError(fmt.Errorf("delete error"))
 	mock.ExpectRollback()
-
 	// now we execute our method
 	if err := tc.DropIndex(context.TODO(), nil, indexID, ts); err == nil {
 		t.Errorf("was expecting an error, but there was none")
 	}
 
-	// we make sure that all expectations were met
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Errorf("there were unfulfilled expectations: %s", err)
+	errMsg := "get sql RowsAffected failed"
+	mock.ExpectBegin()
+	mock.ExpectExec("update indexes").WillReturnResult(sqlmock.NewErrorResult(errors.New(errMsg)))
+	mock.ExpectRollback()
+	// mock sql result error
+	err := tc.DropIndex(context.TODO(), nil, indexID, ts)
+	if !strings.Contains(err.Error(), errMsg) {
+		t.Fatalf("unexpected error:%s", err)
+	}
+}
+
+func TestDropIndex_RollbackOnFailure2(t *testing.T) {
+	mock, tc := getMock(t)
+	defer tc.DB.Close()
+
+	mock.ExpectBegin()
+	mock.ExpectExec("update indexes").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("update segment_indexes").WillReturnError(fmt.Errorf("delete error"))
+	mock.ExpectRollback()
+	// now we execute our method
+	if err := tc.DropIndex(context.TODO(), nil, indexID, ts); err == nil {
+		t.Errorf("was expecting an error, but there was none")
+	}
+
+	errMsg := "get sql RowsAffected failed"
+	mock.ExpectBegin()
+	mock.ExpectExec("update indexes").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("update segment_indexes").WillReturnResult(sqlmock.NewErrorResult(errors.New(errMsg)))
+	mock.ExpectRollback()
+	// mock sql result error
+	err := tc.DropIndex(context.TODO(), nil, indexID, ts)
+	if !strings.Contains(err.Error(), errMsg) {
+		t.Fatalf("unexpected error:%s", err)
 	}
 }
 
@@ -622,7 +884,7 @@ func TestCreateAlias(t *testing.T) {
 	}
 }
 
-func TestCreateAlias_Error(t *testing.T) {
+func TestCreateAlias_ReturnError1(t *testing.T) {
 	mock, tc := getMock(t)
 	defer tc.DB.Close()
 
@@ -639,6 +901,27 @@ func TestCreateAlias_Error(t *testing.T) {
 	}
 	err := tc.CreateAlias(context.TODO(), coll, ts)
 	if !strings.Contains(err.Error(), "update error") {
+		t.Fatalf("unexpected error:%s", err)
+	}
+}
+func TestCreateAlias_ReturnError2(t *testing.T) {
+	mock, tc := getMock(t)
+	defer tc.DB.Close()
+
+	rows := sqlmock.NewRows(
+		[]string{"c.id", "c.tenant_id", "c.collection_id", "c.collection_name", "c.collection_alias"},
+	).AddRow([]driver.Value{1, tenantID, collID, collName, nil}...)
+	errMsg := "get sql RowsAffected failed"
+	mock.ExpectQuery("select").WithArgs(collID, ts).WillReturnRows(rows)
+	mock.ExpectExec("update collections").WillReturnResult(sqlmock.NewErrorResult(errors.New(errMsg)))
+
+	// mock sql result error
+	coll := &model.Collection{
+		CollectionID: collID,
+		Aliases:      []string{aliasName1, aliasName2},
+	}
+	err := tc.CreateAlias(context.TODO(), coll, ts)
+	if !strings.Contains(err.Error(), errMsg) {
 		t.Fatalf("unexpected error:%s", err)
 	}
 }

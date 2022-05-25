@@ -292,11 +292,17 @@ func (tc *TableCatalog) DropCollection(ctx context.Context, collectionInfo *mode
 				return err
 			}
 			isDDMsgSent := "false"
-			_, err = tx.Exec(sqlStr6, ddOp.Type, ddOpStr, isDDMsgSent, ts)
+			rs, err = tx.Exec(sqlStr6, ddOp.Type, ddOpStr, isDDMsgSent, ts)
 			if err != nil {
 				log.Error("insert dd_msg_send failed", zap.Error(err))
 				return err
 			}
+			n, err = rs.RowsAffected()
+			if err != nil {
+				log.Error("get RowsAffected failed", zap.Error(err))
+				return err
+			}
+			log.Debug("table dd_msg_send RowsAffected:", zap.Any("rows", n))
 		}
 
 		return err
@@ -415,6 +421,12 @@ func (tc *TableCatalog) DropIndex(ctx context.Context, collectionInfo *model.Col
 			log.Error("update indexes by index ID failed", zap.Error(err), zap.Int64("indexID", dropIdxID))
 			return err
 		}
+		n, err := rs.RowsAffected()
+		if err != nil {
+			log.Error("get RowsAffected failed", zap.Error(err))
+			return err
+		}
+		log.Debug("table indexes RowsAffected:", zap.Any("rows", n))
 
 		// sql 2
 		sqlStr2 := "update segment_indexes set is_deleted=true where index_id=?"
@@ -423,7 +435,7 @@ func (tc *TableCatalog) DropIndex(ctx context.Context, collectionInfo *model.Col
 			log.Error("update segment_indexes by index ID failed", zap.Error(err), zap.Int64("indexID", dropIdxID))
 			return err
 		}
-		n, err := rs.RowsAffected()
+		n, err = rs.RowsAffected()
 		if err != nil {
 			log.Error("get RowsAffected failed", zap.Error(err))
 			return err
