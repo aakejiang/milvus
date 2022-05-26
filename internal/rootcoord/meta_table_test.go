@@ -279,7 +279,10 @@ func TestMetaTable(t *testing.T) {
 		defer wg.Done()
 		ts := ftso()
 
-		err = mt.AddCollection(collInfo, ts, "{\"body\":\"Ggh0ZXN0Q29sbCIIdGVzdFBhcnQwATgU\",\"type\":\"CreateCollection\"}")
+		err = mt.AddCollection(collInfo, ts, model.DdOperation{
+			Body: "Ggh0ZXN0Q29sbCIIdGVzdFBhcnQwATgU",
+			Type: "CreateCollection",
+		})
 		assert.Nil(t, err)
 		assert.Equal(t, uint64(1), ts)
 
@@ -337,7 +340,7 @@ func TestMetaTable(t *testing.T) {
 	t.Run("add partition", func(t *testing.T) {
 		defer wg.Done()
 		ts := ftso()
-		err = mt.AddPartition(collID, partName, partID, ts, "")
+		err = mt.AddPartition(collID, partName, partID, ts, model.DdOperation{})
 		assert.Nil(t, err)
 		//assert.Equal(t, ts, uint64(2))
 
@@ -505,7 +508,7 @@ func TestMetaTable(t *testing.T) {
 	t.Run("drop partition", func(t *testing.T) {
 		defer wg.Done()
 		ts := ftso()
-		id, err := mt.DeletePartition(collID, partName, ts, "")
+		id, err := mt.DeletePartition(collID, partName, ts, model.DdOperation{})
 		assert.Nil(t, err)
 		assert.Equal(t, partID, id)
 
@@ -519,12 +522,12 @@ func TestMetaTable(t *testing.T) {
 	t.Run("drop collection", func(t *testing.T) {
 		defer wg.Done()
 		ts := ftso()
-		err = mt.DeleteCollection(collIDInvalid, ts, "")
+		err = mt.DeleteCollection(collIDInvalid, ts, model.DdOperation{})
 		assert.NotNil(t, err)
 		ts2 := ftso()
 		err = mt.AddAlias(aliasName2, collName, ts2)
 		assert.Nil(t, err)
-		err = mt.DeleteCollection(collID, ts, "")
+		err = mt.DeleteCollection(collID, ts, model.DdOperation{})
 		assert.Nil(t, err)
 		ts3 := ftso()
 		err = mt.DropAlias(aliasName2, ts3)
@@ -578,7 +581,7 @@ func TestMetaTable(t *testing.T) {
 			return fmt.Errorf("multi save error")
 		}
 		collInfo.Partitions = []*model.Partition{}
-		assert.Panics(t, func() { mt.AddCollection(collInfo, 0, "") })
+		assert.Panics(t, func() { mt.AddCollection(collInfo, 0, model.DdOperation{}) })
 	})
 
 	wg.Add(1)
@@ -591,7 +594,7 @@ func TestMetaTable(t *testing.T) {
 			return fmt.Errorf("multi save and remove with prefix error")
 		}
 		ts := ftso()
-		assert.Panics(t, func() { mt.DeleteCollection(collInfo.CollectionID, ts, "") })
+		assert.Panics(t, func() { mt.DeleteCollection(collInfo.CollectionID, ts, model.DdOperation{}) })
 	})
 
 	wg.Add(1)
@@ -603,7 +606,7 @@ func TestMetaTable(t *testing.T) {
 
 		ts := ftso()
 		collInfo.Partitions = []*model.Partition{}
-		err = mt.AddCollection(collInfo, ts, "")
+		err = mt.AddCollection(collInfo, ts, model.DdOperation{})
 		assert.Nil(t, err)
 
 		mt.collID2Meta = make(map[int64]model.Collection)
@@ -627,18 +630,18 @@ func TestMetaTable(t *testing.T) {
 
 		ts := ftso()
 		collInfo.Partitions = []*model.Partition{}
-		err = mt.AddCollection(collInfo, ts, "")
+		err = mt.AddCollection(collInfo, ts, model.DdOperation{})
 		assert.Nil(t, err)
 
 		ts = ftso()
-		err = mt.AddPartition(2, "no-part", 22, ts, "")
+		err = mt.AddPartition(2, "no-part", 22, ts, model.DdOperation{})
 		assert.NotNil(t, err)
 		assert.EqualError(t, err, "can't find collection. id = 2")
 
 		coll := mt.collID2Meta[collInfo.CollectionID]
 		coll.Partitions = make([]*model.Partition, Params.RootCoordCfg.MaxPartitionNum)
 		mt.collID2Meta[coll.CollectionID] = coll
-		err = mt.AddPartition(coll.CollectionID, "no-part", 22, ts, "")
+		err = mt.AddPartition(coll.CollectionID, "no-part", 22, ts, model.DdOperation{})
 		assert.NotNil(t, err)
 		assert.EqualError(t, err, fmt.Sprintf("maximum partition's number should be limit to %d", Params.RootCoordCfg.MaxPartitionNum))
 
@@ -648,7 +651,7 @@ func TestMetaTable(t *testing.T) {
 		mockKV.multiSave = func(kvs map[string]string, ts typeutil.Timestamp) error {
 			return fmt.Errorf("multi save error")
 		}
-		assert.Panics(t, func() { mt.AddPartition(coll.CollectionID, "no-part", 22, ts, "") })
+		assert.Panics(t, func() { mt.AddPartition(coll.CollectionID, "no-part", 22, ts, model.DdOperation{}) })
 		//err = mt.AddPartition(coll.CollectionID, "no-part", 22, ts, nil)
 		//assert.NotNil(t, err)
 		//assert.EqualError(t, err, "multi save error")
@@ -659,10 +662,10 @@ func TestMetaTable(t *testing.T) {
 
 		collInfo.Partitions = []*model.Partition{}
 		ts = ftso()
-		err = mt.AddPartition(coll.CollectionID, partName, 22, ts, "")
+		err = mt.AddPartition(coll.CollectionID, partName, 22, ts, model.DdOperation{})
 		assert.NotNil(t, err)
 		assert.EqualError(t, err, fmt.Sprintf("partition name = %s already exists", partName))
-		err = mt.AddPartition(coll.CollectionID, "no-part", partID, ts, "")
+		err = mt.AddPartition(coll.CollectionID, "no-part", partID, ts, model.DdOperation{})
 		assert.NotNil(t, err)
 		assert.EqualError(t, err, fmt.Sprintf("partition id = %d already exists", partID))
 	})
@@ -681,7 +684,7 @@ func TestMetaTable(t *testing.T) {
 
 		collInfo.Partitions = []*model.Partition{}
 		ts := ftso()
-		err = mt.AddCollection(collInfo, ts, "")
+		err = mt.AddCollection(collInfo, ts, model.DdOperation{})
 		assert.Nil(t, err)
 
 		assert.False(t, mt.HasPartition(collInfo.CollectionID, "no-partName", 0))
@@ -704,26 +707,26 @@ func TestMetaTable(t *testing.T) {
 
 		collInfo.Partitions = []*model.Partition{{PartitionID: partID, PartitionName: partName, PartitionCreatedTimestamp: ftso()}}
 		ts := ftso()
-		err = mt.AddCollection(collInfo, ts, "")
+		err = mt.AddCollection(collInfo, ts, model.DdOperation{})
 		assert.Nil(t, err)
 
 		ts = ftso()
-		_, err = mt.DeletePartition(collInfo.CollectionID, Params.CommonCfg.DefaultPartitionName, ts, "")
+		_, err = mt.DeletePartition(collInfo.CollectionID, Params.CommonCfg.DefaultPartitionName, ts, model.DdOperation{})
 		assert.NotNil(t, err)
 		assert.EqualError(t, err, "default partition cannot be deleted")
 
-		_, err = mt.DeletePartition(collInfo.CollectionID, "abc", ts, "")
+		_, err = mt.DeletePartition(collInfo.CollectionID, "abc", ts, model.DdOperation{})
 		assert.NotNil(t, err)
 		assert.EqualError(t, err, "partition abc does not exist")
 
 		mockKV.save = func(key, value string, ts typeutil.Timestamp) error { return errors.New("mocked error") }
-		assert.Panics(t, func() { mt.DeletePartition(collInfo.CollectionID, partName, ts, "") })
+		assert.Panics(t, func() { mt.DeletePartition(collInfo.CollectionID, partName, ts, model.DdOperation{}) })
 		//_, err = mt.DeletePartition(collInfo.CollectionID, partName, ts, nil)
 		//assert.NotNil(t, err)
 		//assert.EqualError(t, err, "multi save and remove with prefix error")
 
 		mt.collID2Meta = make(map[int64]model.Collection)
-		_, err = mt.DeletePartition(collInfo.CollectionID, "abc", ts, "")
+		_, err = mt.DeletePartition(collInfo.CollectionID, "abc", ts, model.DdOperation{})
 		assert.NotNil(t, err)
 		assert.EqualError(t, err, fmt.Sprintf("can't find collection id = %d", collInfo.CollectionID))
 	})
@@ -745,7 +748,7 @@ func TestMetaTable(t *testing.T) {
 
 		collInfo.Partitions = []*model.Partition{}
 		ts := ftso()
-		err = mt.AddCollection(collInfo, ts, "")
+		err = mt.AddCollection(collInfo, ts, model.DdOperation{})
 		assert.Nil(t, err)
 
 		segIdxInfo := model.Index{
@@ -776,7 +779,7 @@ func TestMetaTable(t *testing.T) {
 
 		collInfo.Partitions = []*model.Partition{}
 		ts = ftso()
-		err = mt.AddCollection(collInfo, ts, "")
+		err = mt.AddCollection(collInfo, ts, model.DdOperation{})
 		assert.Nil(t, err)
 
 		segIdxInfo.IndexID = indexID
@@ -804,7 +807,7 @@ func TestMetaTable(t *testing.T) {
 
 		collInfo.Partitions = []*model.Partition{}
 		ts := ftso()
-		err = mt.AddCollection(collInfo, ts, "")
+		err = mt.AddCollection(collInfo, ts, model.DdOperation{})
 		assert.Nil(t, err)
 		mt.indexID2Meta[indexID] = *idxInfo[0]
 
@@ -843,7 +846,7 @@ func TestMetaTable(t *testing.T) {
 		assert.Nil(t, err)
 		collInfo.Partitions = []*model.Partition{}
 		ts = ftso()
-		err = mt.AddCollection(collInfo, ts, "")
+		err = mt.AddCollection(collInfo, ts, model.DdOperation{})
 		mt.indexID2Meta[indexID] = *idxInfo[0]
 
 		assert.Nil(t, err)
@@ -870,7 +873,7 @@ func TestMetaTable(t *testing.T) {
 
 		collInfo.Partitions = []*model.Partition{}
 		ts := ftso()
-		err = mt.AddCollection(collInfo, ts, "")
+		err = mt.AddCollection(collInfo, ts, model.DdOperation{})
 		assert.Nil(t, err)
 		mt.indexID2Meta[indexID] = *idxInfo[0]
 
@@ -926,7 +929,7 @@ func TestMetaTable(t *testing.T) {
 
 		collInfo.Partitions = []*model.Partition{}
 		ts := ftso()
-		err = mt.AddCollection(collInfo, ts, "")
+		err = mt.AddCollection(collInfo, ts, model.DdOperation{})
 		assert.Nil(t, err)
 
 		mt.collID2Meta = make(map[int64]model.Collection)
@@ -1000,7 +1003,7 @@ func TestMetaTable(t *testing.T) {
 
 		collInfo.Partitions = []*model.Partition{}
 		ts := ftso()
-		err = mt.AddCollection(collInfo, ts, "")
+		err = mt.AddCollection(collInfo, ts, model.DdOperation{})
 		assert.Nil(t, err)
 
 		_, _, err = mt.GetNotIndexedSegments(collInfo.Name, "no-field", idx, nil)
@@ -1037,7 +1040,7 @@ func TestMetaTable(t *testing.T) {
 
 		collInfo.Partitions = []*model.Partition{}
 		ts := ftso()
-		err = mt.AddCollection(collInfo, ts, "")
+		err = mt.AddCollection(collInfo, ts, model.DdOperation{})
 		assert.Nil(t, err)
 		mt.indexID2Meta = make(map[int64]model.Index)
 		_, _, err = mt.GetIndexByName(collInfo.Name, idxInfo[0].IndexName)
@@ -1111,14 +1114,14 @@ func TestMetaWithTimestamp(t *testing.T) {
 
 	collInfo.Partitions = []*model.Partition{{PartitionID: partID1, PartitionName: partName1, PartitionCreatedTimestamp: ftso()}}
 	t1 := ftso()
-	err = mt.AddCollection(collInfo, t1, "")
+	err = mt.AddCollection(collInfo, t1, model.DdOperation{})
 	assert.Nil(t, err)
 
 	collInfo.CollectionID = collID2
 	collInfo.Partitions = []*model.Partition{{PartitionID: partID2, PartitionName: partName2, PartitionCreatedTimestamp: ftso()}}
 	collInfo.Name = collName2
 	t2 := ftso()
-	err = mt.AddCollection(collInfo, t2, "")
+	err = mt.AddCollection(collInfo, t2, model.DdOperation{})
 	assert.Nil(t, err)
 
 	assert.True(t, mt.HasCollection(collID1, 0))

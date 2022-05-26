@@ -224,3 +224,11 @@ func ConvertUserDBToModel(user *User) *model.Credential {
 		EncryptedPassword: user.EncryptedPassword,
 	}
 }
+
+func ConvertDdOperationDBToModel(ddOp DdOperation) model.DdOperation {
+	return model.DdOperation{
+		Type:   ddOp.OperationType,
+		Body:   ddOp.OperationBody,
+		IsSent: ddOp.IsSent,
+	}
+}

@@ -20,5 +20,5 @@ type Collection struct {
 	CreateTime           uint64
 	ConsistencyLevel     commonpb.ConsistencyLevel
 	Aliases              []string
-	Extra                map[string]string // extra kvs
+	Extra                map[string]interface{} // extra kvs
 }

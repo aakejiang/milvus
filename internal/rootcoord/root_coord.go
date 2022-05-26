@@ -18,7 +18,6 @@ package rootcoord
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"math/rand"
@@ -1176,7 +1175,7 @@ func (c *Core) initData() error {
 
 func (c *Core) reSendDdMsg(ctx context.Context, force bool) error {
 	if !force {
-		flag, err := c.MetaTable.txn.Load(metastore.DDMsgSendPrefix)
+		flag, err := c.MetaTable.IsDDMsgSent()
 		if err != nil {
 			// TODO, this is super ugly hack but our kv interface does not support loadWithExist
 			// leave it for later
@@ -1186,24 +1185,16 @@ func (c *Core) reSendDdMsg(ctx context.Context, force bool) error {
 			}
 			return err
 		}
-		value, err := strconv.ParseBool(flag)
-		if err != nil {
-			return err
-		}
-		if value {
+		if flag {
 			log.Debug("skip reSendDdMsg with dd-msg-send set to true")
 			return nil
 		}
 	}
 
-	ddOpStr, err := c.MetaTable.txn.Load(metastore.DDOperationPrefix)
+	ddOp, err := c.MetaTable.LoadDdOperation()
 	if err != nil {
 		log.Debug("DdOperation key does not exist")
 		return nil
-	}
-	var ddOp metastore.DdOperation
-	if err = json.Unmarshal([]byte(ddOpStr), &ddOp); err != nil {
-		return err
 	}
 
 	invalidateCache := false
@@ -1216,7 +1207,7 @@ func (c *Core) reSendDdMsg(ctx context.Context, force bool) error {
 	// since create collection needs a start position to succeed
 	case CreateCollectionDDType:
 		var ddReq = internalpb.CreateCollectionRequest{}
-		if err = proto.Unmarshal(ddOp.Body, &ddReq); err != nil {
+		if err = proto.Unmarshal([]byte(ddOp.Body), &ddReq); err != nil {
 			return err
 		}
 		if _, err := c.MetaTable.GetCollectionByName(ddReq.CollectionName, 0); err != nil {
@@ -1229,7 +1220,7 @@ func (c *Core) reSendDdMsg(ctx context.Context, force bool) error {
 		}
 	case DropCollectionDDType:
 		var ddReq = internalpb.DropCollectionRequest{}
-		if err = proto.Unmarshal(ddOp.Body, &ddReq); err != nil {
+		if err = proto.Unmarshal([]byte(ddOp.Body), &ddReq); err != nil {
 			return err
 		}
 		ts = ddReq.Base.Timestamp
@@ -1246,7 +1237,7 @@ func (c *Core) reSendDdMsg(ctx context.Context, force bool) error {
 		}
 	case CreatePartitionDDType:
 		var ddReq = internalpb.CreatePartitionRequest{}
-		if err = proto.Unmarshal(ddOp.Body, &ddReq); err != nil {
+		if err = proto.Unmarshal([]byte(ddOp.Body), &ddReq); err != nil {
 			return err
 		}
 		ts = ddReq.Base.Timestamp
@@ -1267,7 +1258,7 @@ func (c *Core) reSendDdMsg(ctx context.Context, force bool) error {
 		}
 	case DropPartitionDDType:
 		var ddReq = internalpb.DropPartitionRequest{}
-		if err = proto.Unmarshal(ddOp.Body, &ddReq); err != nil {
+		if err = proto.Unmarshal([]byte(ddOp.Body), &ddReq); err != nil {
 			return err
 		}
 		ts = ddReq.Base.Timestamp
@@ -1297,7 +1288,7 @@ func (c *Core) reSendDdMsg(ctx context.Context, force bool) error {
 	}
 
 	// Update DDOperation in etcd
-	return c.MetaTable.txn.Save(metastore.DDMsgSendPrefix, strconv.FormatBool(true))
+	return c.MetaTable.UpdateDDOperation(ddOp, true)
 }
 
 // Start starts RootCoord.

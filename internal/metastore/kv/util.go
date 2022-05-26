@@ -1,6 +1,7 @@
 package kv
 
 import (
+	"github.com/milvus-io/milvus/internal/metastore"
 	"github.com/milvus-io/milvus/internal/metastore/model"
 	pb "github.com/milvus-io/milvus/internal/proto/etcdpb"
 	"github.com/milvus-io/milvus/internal/proto/internalpb"
@@ -50,7 +51,7 @@ func BatchConvertFieldPBToModel(fieldSchemas []*schemapb.FieldSchema) []*model.F
 	return fields
 }
 
-func ConvertCollectionPBToModel(coll *pb.CollectionInfo, extra map[string]string) *model.Collection {
+func ConvertCollectionPBToModel(coll *pb.CollectionInfo, extra map[string]interface{}) *model.Collection {
 	partitions := make([]*model.Partition, len(coll.PartitionIDs))
 	for idx := range coll.PartitionIDs {
 		partitions[idx] = &model.Partition{
@@ -224,5 +225,12 @@ func ConvertToCredentialPB(cred *model.Credential) *internalpb.CredentialInfo {
 	return &internalpb.CredentialInfo{
 		Username:          cred.Username,
 		EncryptedPassword: cred.EncryptedPassword,
+	}
+}
+
+func ConvertDdOperationToModel(operation metastore.DdOperation) model.DdOperation {
+	return model.DdOperation{
+		Type: operation.Type,
+		Body: string(operation.Body),
 	}
 }

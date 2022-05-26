@@ -524,7 +524,7 @@ func createCollectionInMeta(dbName, collName string, core *Core, shardsNum int32
 	// build DdOperation and save it into etcd, when ddmsg send fail,
 	// system can restore ddmsg from etcd and re-send
 	ddCollReq.Base.Timestamp = ts
-	ddOpStr, err := metastore.EncodeDdOperation(&ddCollReq, CreateCollectionDDType)
+	ddOp, err := metastore.ToDdOperation(&ddCollReq, CreateCollectionDDType)
 	if err != nil {
 		return fmt.Errorf("encodeDdOperation fail, error = %w", err)
 	}
@@ -539,7 +539,7 @@ func createCollectionInMeta(dbName, collName string, core *Core, shardsNum int32
 		// clear ddl timetick in all conditions
 		defer core.chanTimeTick.removeDdlTimeTick(ts, reason)
 
-		err = core.MetaTable.AddCollection(&collInfo, ts, ddOpStr)
+		err = core.MetaTable.AddCollection(&collInfo, ts, ddOp)
 		if err != nil {
 			return fmt.Errorf("meta table add collection failed,error = %w", err)
 		}

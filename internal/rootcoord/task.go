@@ -19,8 +19,6 @@ package rootcoord
 import (
 	"context"
 	"fmt"
-	"strconv"
-
 	"github.com/golang/protobuf/proto"
 	"github.com/milvus-io/milvus/internal/common"
 	"github.com/milvus-io/milvus/internal/log"
@@ -207,7 +205,7 @@ func (t *CreateCollectionReqTask) Execute(ctx context.Context) error {
 	// build DdOperation and save it into etcd, when ddmsg send fail,
 	// system can restore ddmsg from etcd and re-send
 	ddCollReq.Base.Timestamp = ts
-	ddOpStr, err := metastore.EncodeDdOperation(&ddCollReq, CreateCollectionDDType)
+	ddOp, err := metastore.ToDdOperation(&ddCollReq, CreateCollectionDDType)
 	if err != nil {
 		return fmt.Errorf("encodeDdOperation fail, error = %w", err)
 	}
@@ -240,7 +238,7 @@ func (t *CreateCollectionReqTask) Execute(ctx context.Context) error {
 		}
 
 		// update meta table after send dd operation
-		if err = t.core.MetaTable.AddCollection(&collInfo, ts, ddOpStr); err != nil {
+		if err = t.core.MetaTable.AddCollection(&collInfo, ts, ddOp); err != nil {
 			t.core.chanTimeTick.removeDmlChannels(chanNames...)
 			t.core.chanTimeTick.removeDeltaChannels(deltaChanNames...)
 			// it's ok just to leave create collection message sent, datanode and querynode does't process CreateCollection logic
@@ -265,7 +263,7 @@ func (t *CreateCollectionReqTask) Execute(ctx context.Context) error {
 	}
 
 	// Update DDOperation in etcd
-	return t.core.MetaTable.txn.Save(metastore.DDMsgSendPrefix, strconv.FormatBool(true))
+	return t.core.MetaTable.UpdateDDOperation(ddOp, true)
 }
 
 // DropCollectionReqTask drop collection request task
@@ -327,7 +325,7 @@ func (t *DropCollectionReqTask) Execute(ctx context.Context) error {
 	// build DdOperation and save it into etcd, when ddmsg send fail,
 	// system can restore ddmsg from etcd and re-send
 	ddReq.Base.Timestamp = ts
-	ddOpStr, err := metastore.EncodeDdOperation(&ddReq, DropCollectionDDType)
+	ddOp, err := metastore.ToDdOperation(&ddReq, DropCollectionDDType)
 	if err != nil {
 		return fmt.Errorf("encodeDdOperation fail, error = %w", err)
 	}
@@ -347,7 +345,7 @@ func (t *DropCollectionReqTask) Execute(ctx context.Context) error {
 		}
 
 		// update meta table after send dd operation
-		if err = t.core.MetaTable.DeleteCollection(collMeta.CollectionID, ts, ddOpStr); err != nil {
+		if err = t.core.MetaTable.DeleteCollection(collMeta.CollectionID, ts, ddOp); err != nil {
 			return err
 		}
 
@@ -387,7 +385,7 @@ func (t *DropCollectionReqTask) Execute(ctx context.Context) error {
 	}
 
 	// Update DDOperation in etcd
-	return t.core.MetaTable.txn.Save(metastore.DDMsgSendPrefix, strconv.FormatBool(true))
+	return t.core.MetaTable.UpdateDDOperation(ddOp, true)
 }
 
 // HasCollectionReqTask has collection request task
@@ -547,7 +545,7 @@ func (t *CreatePartitionReqTask) Execute(ctx context.Context) error {
 	// build DdOperation and save it into etcd, when ddmsg send fail,
 	// system can restore ddmsg from etcd and re-send
 	ddReq.Base.Timestamp = ts
-	ddOpStr, err := metastore.EncodeDdOperation(&ddReq, CreatePartitionDDType)
+	ddOp, err := metastore.ToDdOperation(&ddReq, CreatePartitionDDType)
 	if err != nil {
 		return fmt.Errorf("encodeDdOperation fail, error = %w", err)
 	}
@@ -567,7 +565,7 @@ func (t *CreatePartitionReqTask) Execute(ctx context.Context) error {
 		}
 
 		// update meta table after send dd operation
-		if err = t.core.MetaTable.AddPartition(collMeta.CollectionID, t.Req.PartitionName, partID, ts, ddOpStr); err != nil {
+		if err = t.core.MetaTable.AddPartition(collMeta.CollectionID, t.Req.PartitionName, partID, ts, ddOp); err != nil {
 			return err
 		}
 
@@ -591,7 +589,7 @@ func (t *CreatePartitionReqTask) Execute(ctx context.Context) error {
 	}
 
 	// Update DDOperation in etcd
-	return t.core.MetaTable.txn.Save(metastore.DDMsgSendPrefix, strconv.FormatBool(true))
+	return t.core.MetaTable.UpdateDDOperation(ddOp, true)
 }
 
 // DropPartitionReqTask drop partition request task
@@ -638,7 +636,7 @@ func (t *DropPartitionReqTask) Execute(ctx context.Context) error {
 	// build DdOperation and save it into etcd, when ddmsg send fail,
 	// system can restore ddmsg from etcd and re-send
 	ddReq.Base.Timestamp = ts
-	ddOpStr, err := metastore.EncodeDdOperation(&ddReq, DropPartitionDDType)
+	ddOp, err := metastore.ToDdOperation(&ddReq, DropPartitionDDType)
 	if err != nil {
 		return fmt.Errorf("encodeDdOperation fail, error = %w", err)
 	}
@@ -658,7 +656,7 @@ func (t *DropPartitionReqTask) Execute(ctx context.Context) error {
 		}
 
 		// update meta table after send dd operation
-		if _, err = t.core.MetaTable.DeletePartition(collInfo.CollectionID, t.Req.PartitionName, ts, ddOpStr); err != nil {
+		if _, err = t.core.MetaTable.DeletePartition(collInfo.CollectionID, t.Req.PartitionName, ts, ddOp); err != nil {
 			return err
 		}
 
@@ -689,7 +687,7 @@ func (t *DropPartitionReqTask) Execute(ctx context.Context) error {
 	//}
 
 	// Update DDOperation in etcd
-	return t.core.MetaTable.txn.Save(metastore.DDMsgSendPrefix, strconv.FormatBool(true))
+	return t.core.MetaTable.UpdateDDOperation(ddOp, true)
 }
 
 // HasPartitionReqTask has partition request task

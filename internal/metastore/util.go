@@ -75,6 +75,32 @@ func GetFieldSchemaByIndexID(coll *model.Collection, idxID typeutil.UniqueID) (*
 	return GetFieldSchemaByID(coll, fieldID)
 }
 
+// ToDdOperation construct DdOperation
+func ToDdOperation(m proto.Message, ddType string) (model.DdOperation, error) {
+	mByte, err := proto.Marshal(m)
+	if err != nil {
+		return model.DdOperation{}, err
+	}
+	ddOp := model.DdOperation{
+		Body: string(mByte),
+		Type: ddType,
+	}
+	return ddOp, nil
+}
+
+// EncodeDdOp serialize DdOperation into string
+func EncodeDdOp(ddOpModel model.DdOperation) (string, error) {
+	ddOp := DdOperation{
+		Body: []byte(ddOpModel.Body),
+		Type: ddOpModel.Type,
+	}
+	ddOpByte, err := json.Marshal(ddOp)
+	if err != nil {
+		return "", err
+	}
+	return string(ddOpByte), nil
+}
+
 // EncodeDdOperation serialize DdOperation into string
 func EncodeDdOperation(m proto.Message, ddType string) (string, error) {
 	mByte, err := proto.Marshal(m)

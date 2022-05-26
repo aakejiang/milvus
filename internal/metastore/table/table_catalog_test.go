@@ -117,15 +117,15 @@ func TestCreateCollection(t *testing.T) {
 	mock, tc := getMock(t)
 	defer tc.DB.Close()
 
-	ddOpStr, _ := metastore.EncodeDdOperation(&internalpb.CreateCollectionRequest{
+	ddOp, _ := metastore.ToDdOperation(&internalpb.CreateCollectionRequest{
 		CollectionName: collName,
 		PartitionName:  partName,
 		CollectionID:   collID,
 		PartitionID:    partID,
 	}, "CreateCollection")
-	meta := map[string]string{}
-	meta[metastore.DDMsgSendPrefix] = "false"
-	meta[metastore.DDOperationPrefix] = ddOpStr
+	meta := map[string]interface{}{}
+	meta[metastore.DDMsgSendPrefix] = false
+	meta[metastore.DDOperationPrefix] = ddOp
 	collInfo.Extra = meta
 
 	mock.ExpectBegin()
@@ -405,15 +405,15 @@ func TestDropCollection(t *testing.T) {
 	mock, tc := getMock(t)
 	defer tc.DB.Close()
 
-	ddOpStr, _ := metastore.EncodeDdOperation(&internalpb.CreateCollectionRequest{
+	ddOp, _ := metastore.ToDdOperation(&internalpb.CreateCollectionRequest{
 		CollectionName: collName,
 		PartitionName:  partName,
 		CollectionID:   collID,
 		PartitionID:    partID,
 	}, "DropCollection")
-	meta := map[string]string{}
-	meta[metastore.DDMsgSendPrefix] = "false"
-	meta[metastore.DDOperationPrefix] = ddOpStr
+	meta := map[string]interface{}{}
+	meta[metastore.DDMsgSendPrefix] = false
+	meta[metastore.DDOperationPrefix] = ddOp
 	collInfo.Extra = meta
 
 	mock.ExpectBegin()

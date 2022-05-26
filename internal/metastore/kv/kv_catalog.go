@@ -34,10 +34,18 @@ func (kc *Catalog) CreateCollection(ctx context.Context, coll *model.Collection,
 		return fmt.Errorf("marshal fail key:%s, err:%w", k1, err)
 	}
 
-	// save ddOpStr into etcd
 	kvs := map[string]string{k1: string(v1)}
+	// save ddOpStr into etcd
 	for k, v := range coll.Extra {
-		kvs[k] = v
+		if k == metastore.DDOperationPrefix {
+			ddOpStr, err := metastore.EncodeDdOp(v.(model.DdOperation))
+			if err != nil {
+				return fmt.Errorf("encodeDdOperation fail, error = %w", err)
+			}
+			kvs[k] = ddOpStr
+		} else {
+			kvs[k] = v.(string)
+		}
 	}
 
 	err = kc.Snapshot.MultiSave(kvs, ts)
@@ -66,7 +74,19 @@ func (kc *Catalog) CreatePartition(ctx context.Context, coll *model.Collection, 
 	}
 
 	// save ddOpStr into etcd
-	err = kc.Txn.MultiSave(coll.Extra)
+	ddOpProperties := map[string]string{}
+	for k, v := range coll.Extra {
+		if k == metastore.DDOperationPrefix {
+			ddOpStr, err := metastore.EncodeDdOp(v.(model.DdOperation))
+			if err != nil {
+				return fmt.Errorf("encodeDdOperation fail, error = %w", err)
+			}
+			ddOpProperties[k] = ddOpStr
+		} else {
+			ddOpProperties[k] = v.(string)
+		}
+	}
+	err = kc.Txn.MultiSave(ddOpProperties)
 	if err != nil {
 		// will not panic, missing create msg
 		log.Warn("create partition persist ddop meta fail", zap.Int64("collectionID", coll.CollectionID), zap.Error(err))
@@ -167,7 +187,7 @@ func (kc *Catalog) GetCollectionByID(ctx context.Context, collectionID typeutil.
 		log.Error("collection meta marshal fail", zap.String("key", collKey), zap.Error(err))
 		return nil, err
 	}
-	return ConvertCollectionPBToModel(collMeta, map[string]string{}), nil
+	return ConvertCollectionPBToModel(collMeta, nil), nil
 }
 
 func (kc *Catalog) CollectionExists(ctx context.Context, collectionID typeutil.UniqueID, ts typeutil.Timestamp) bool {
@@ -214,7 +234,15 @@ func (kc *Catalog) DropCollection(ctx context.Context, collectionInfo *model.Col
 	// Txn operation
 	kvs := map[string]string{}
 	for k, v := range collectionInfo.Extra {
-		kvs[k] = v
+		if k == metastore.DDOperationPrefix {
+			ddOpStr, err := metastore.EncodeDdOp(v.(model.DdOperation))
+			if err != nil {
+				return fmt.Errorf("encodeDdOperation fail, error = %w", err)
+			}
+			kvs[k] = ddOpStr
+		} else {
+			kvs[k] = v.(string)
+		}
 	}
 
 	delMetaKeysTxn := []string{
@@ -258,7 +286,15 @@ func (kc *Catalog) DropPartition(ctx context.Context, collectionInfo *model.Coll
 	// Txn operation
 	metaTxn := map[string]string{}
 	for k, v := range collectionInfo.Extra {
-		metaTxn[k] = v
+		if k == metastore.DDOperationPrefix {
+			ddOpStr, err := metastore.EncodeDdOp(v.(model.DdOperation))
+			if err != nil {
+				return fmt.Errorf("encodeDdOperation fail, error = %w", err)
+			}
+			metaTxn[k] = ddOpStr
+		} else {
+			metaTxn[k] = v.(string)
+		}
 	}
 	err = kc.Txn.MultiSaveAndRemoveWithPrefix(metaTxn, delMetaKeys)
 	if err != nil {
@@ -341,7 +377,7 @@ func (kc *Catalog) GetCollectionByName(ctx context.Context, collectionName strin
 			continue
 		}
 		if colMeta.Schema.Name == collectionName {
-			return ConvertCollectionPBToModel(&colMeta, map[string]string{}), nil
+			return ConvertCollectionPBToModel(&colMeta, nil), nil
 		}
 	}
 	return nil, fmt.Errorf("can't find collection: %s, at timestamp = %d", collectionName, ts)
@@ -364,7 +400,7 @@ func (kc *Catalog) ListCollections(ctx context.Context, ts typeutil.Timestamp) (
 			log.Warn("unmarshal collection info failed", zap.Error(err))
 			continue
 		}
-		colls[collMeta.Schema.Name] = ConvertCollectionPBToModel(&collMeta, map[string]string{})
+		colls[collMeta.Schema.Name] = ConvertCollectionPBToModel(&collMeta, nil)
 	}
 	return colls, nil
 }
@@ -383,7 +419,7 @@ func (kc *Catalog) ListAliases(ctx context.Context) ([]*model.Collection, error)
 			log.Warn("unmarshal aliases failed", zap.Error(err))
 			continue
 		}
-		colls = append(colls, ConvertCollectionPBToModel(&aliasInfo, map[string]string{}))
+		colls = append(colls, ConvertCollectionPBToModel(&aliasInfo, nil))
 	}
 	return colls, nil
 }
@@ -494,6 +530,38 @@ func (kc *Catalog) ListCredentials(ctx context.Context) ([]string, error) {
 		usernames = append(usernames, username)
 	}
 	return usernames, nil
+}
+
+func (kc *Catalog) UpdateDDOperation(ddOp model.DdOperation, isSent bool) error {
+	return kc.Txn.Save(metastore.DDMsgSendPrefix, strconv.FormatBool(true))
+}
+
+func (kc *Catalog) IsDDMsgSent() (bool, error) {
+	value, err := kc.Txn.Load(metastore.DDMsgSendPrefix)
+	if err != nil {
+		log.Error("load dd-msg-send from kv failed", zap.Error(err))
+		return true, err
+	}
+	flag, err := strconv.ParseBool(value)
+	if err != nil {
+		log.Error("invalid value %s", zap.String("is_sent", value))
+		return true, err
+	}
+	return flag, nil
+}
+
+func (kc *Catalog) LoadDdOperation() (model.DdOperation, error) {
+	ddOpStr, err := kc.Txn.Load(metastore.DDOperationPrefix)
+	if err != nil {
+		log.Error("load dd-operation from kv failed", zap.Error(err))
+		return model.DdOperation{}, err
+	}
+	var ddOp metastore.DdOperation
+	if err = json.Unmarshal([]byte(ddOpStr), &ddOp); err != nil {
+		log.Error("unmarshal dd operation failed", zap.Error(err))
+		return model.DdOperation{}, err
+	}
+	return ConvertDdOperationToModel(ddOp), nil
 }
 
 func (kc *Catalog) Close() {

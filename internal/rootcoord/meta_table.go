@@ -180,7 +180,7 @@ func (mt *MetaTable) reloadFromKV() error {
 }
 
 // AddCollection add collection
-func (mt *MetaTable) AddCollection(coll *model.Collection, ts typeutil.Timestamp, ddOpStr string) error {
+func (mt *MetaTable) AddCollection(coll *model.Collection, ts typeutil.Timestamp, ddOp model.DdOperation) error {
 	mt.ddLock.Lock()
 	defer mt.ddLock.Unlock()
 
@@ -196,20 +196,16 @@ func (mt *MetaTable) AddCollection(coll *model.Collection, ts typeutil.Timestamp
 	mt.collID2Meta[coll.CollectionID] = *coll
 	mt.collName2ID[coll.Name] = coll.CollectionID
 
-	if len(ddOpStr) == 0 {
-		log.Warn("DD operation is empty")
-	} else {
-		meta := map[string]string{}
-		meta[metastore.DDMsgSendPrefix] = "false"
-		meta[metastore.DDOperationPrefix] = ddOpStr
-		coll.Extra = meta
-	}
+	meta := map[string]interface{}{}
+	meta[metastore.DDMsgSendPrefix] = "false"
+	meta[metastore.DDOperationPrefix] = ddOp
+	coll.Extra = meta
 
 	return mt.catalog.CreateCollection(mt.ctx, coll, ts)
 }
 
 // DeleteCollection delete collection
-func (mt *MetaTable) DeleteCollection(collID typeutil.UniqueID, ts typeutil.Timestamp, ddOpStr string) error {
+func (mt *MetaTable) DeleteCollection(collID typeutil.UniqueID, ts typeutil.Timestamp, ddOp model.DdOperation) error {
 	mt.ddLock.Lock()
 	defer mt.ddLock.Unlock()
 
@@ -250,9 +246,9 @@ func (mt *MetaTable) DeleteCollection(collID typeutil.UniqueID, ts typeutil.Time
 	}
 
 	// save ddOpStr into etcd
-	var meta = map[string]string{
+	var meta = map[string]interface{}{
 		metastore.DDMsgSendPrefix:   "false",
-		metastore.DDOperationPrefix: ddOpStr,
+		metastore.DDOperationPrefix: ddOp,
 	}
 
 	collection := &model.Collection{
@@ -383,7 +379,7 @@ func (mt *MetaTable) ListCollectionPhysicalChannels() map[typeutil.UniqueID][]st
 }
 
 // AddPartition add partition
-func (mt *MetaTable) AddPartition(collID typeutil.UniqueID, partitionName string, partitionID typeutil.UniqueID, ts typeutil.Timestamp, ddOpStr string) error {
+func (mt *MetaTable) AddPartition(collID typeutil.UniqueID, partitionName string, partitionID typeutil.UniqueID, ts typeutil.Timestamp, ddOp model.DdOperation) error {
 	mt.ddLock.Lock()
 	defer mt.ddLock.Unlock()
 	coll, ok := mt.collID2Meta[collID]
@@ -414,15 +410,11 @@ func (mt *MetaTable) AddPartition(collID typeutil.UniqueID, partitionName string
 		})
 	mt.collID2Meta[collID] = coll
 
-	if len(ddOpStr) == 0 {
-		log.Warn("DD operation is empty")
-	} else {
-		metaTxn := map[string]string{}
-		// save ddOpStr into etcd
-		metaTxn[metastore.DDMsgSendPrefix] = "false"
-		metaTxn[metastore.DDOperationPrefix] = ddOpStr
-		coll.Extra = metaTxn
-	}
+	metaTxn := map[string]interface{}{}
+	// save ddOpStr into etcd
+	metaTxn[metastore.DDMsgSendPrefix] = "false"
+	metaTxn[metastore.DDOperationPrefix] = ddOp
+	coll.Extra = metaTxn
 
 	return mt.catalog.CreatePartition(mt.ctx, &coll, ts)
 }
@@ -498,7 +490,7 @@ func (mt *MetaTable) HasPartition(collID typeutil.UniqueID, partitionName string
 }
 
 // DeletePartition delete partition
-func (mt *MetaTable) DeletePartition(collID typeutil.UniqueID, partitionName string, ts typeutil.Timestamp, ddOpStr string) (typeutil.UniqueID, error) {
+func (mt *MetaTable) DeletePartition(collID typeutil.UniqueID, partitionName string, ts typeutil.Timestamp, ddOp model.DdOperation) (typeutil.UniqueID, error) {
 	mt.ddLock.Lock()
 	defer mt.ddLock.Unlock()
 
@@ -539,15 +531,11 @@ func (mt *MetaTable) DeletePartition(collID typeutil.UniqueID, partitionName str
 	}
 	delete(mt.partID2SegID, partID)
 
-	if len(ddOpStr) == 0 {
-		log.Warn("DD operation is empty")
-	} else {
-		metaTxn := make(map[string]string)
-		// save ddOpStr into etcd
-		metaTxn[metastore.DDMsgSendPrefix] = "false"
-		metaTxn[metastore.DDOperationPrefix] = ddOpStr
-		col.Extra = metaTxn
-	}
+	metaTxn := map[string]interface{}{}
+	// save ddOpStr into etcd
+	metaTxn[metastore.DDMsgSendPrefix] = "false"
+	metaTxn[metastore.DDOperationPrefix] = ddOp
+	col.Extra = metaTxn
 
 	err := mt.catalog.DropPartition(mt.ctx, &col, partID, ts)
 	if err != nil {
@@ -1105,4 +1093,16 @@ func (mt *MetaTable) ListCredentialUsernames() (*milvuspb.ListCredUsersResponse,
 		return nil, fmt.Errorf("list credential usernames err:%w", err)
 	}
 	return &milvuspb.ListCredUsersResponse{Usernames: usernames}, nil
+}
+
+func (mt *MetaTable) UpdateDDOperation(ddOp model.DdOperation, isSent bool) error {
+	return mt.catalog.UpdateDDOperation(ddOp, isSent)
+}
+
+func (mt *MetaTable) IsDDMsgSent() (bool, error) {
+	return mt.catalog.IsDDMsgSent()
+}
+
+func (mt *MetaTable) LoadDdOperation() (model.DdOperation, error) {
+	return mt.catalog.LoadDdOperation()
 }
