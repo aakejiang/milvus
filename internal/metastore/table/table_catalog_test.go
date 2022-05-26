@@ -1161,3 +1161,60 @@ func TestListCredentials(t *testing.T) {
 		}
 	}
 }
+
+func TestLoadDdOperation(t *testing.T) {
+	mock, tc := getMock(t)
+	defer tc.DB.Close()
+
+	sqlSelectSql := "select"
+
+	// mock select failure
+	mock.ExpectQuery(sqlSelectSql).WillReturnError(errors.New("select error"))
+	_, err := tc.LoadDdOperation(context.TODO())
+	if !strings.Contains(err.Error(), "select error") {
+		t.Fatalf("unexpected error:%s", err)
+	}
+
+	// mock select normal
+	rows := sqlmock.NewRows(
+		[]string{"operation_type", "operation_body", "is_sent"},
+	).AddRow("CreateCollection", "xxx", false)
+	mock.ExpectQuery(sqlSelectSql).WillReturnRows(rows)
+	ddOp, err := tc.LoadDdOperation(context.TODO())
+	if err != nil {
+		t.Fatalf("unexpected error:%s", err)
+	}
+
+	if ddOp.Type != "CreateCollection" {
+		t.Fatalf("unexpected dd type:%s", ddOp.Type)
+	}
+	if ddOp.IsSent != false {
+		t.Fatalf("unexpected result:%t", ddOp.IsSent)
+	}
+}
+
+func TestUpdateDDOperation(t *testing.T) {
+	mock, tc := getMock(t)
+	defer tc.DB.Close()
+
+	ddOp, _ := metastore.ToDdOperation(&internalpb.CreateCollectionRequest{
+		CollectionName: collName,
+		PartitionName:  partName,
+		CollectionID:   collID,
+		PartitionID:    partID,
+	}, "CreateCollection")
+
+	// mock select failure
+	mock.ExpectExec("update").WillReturnError(errors.New("update error"))
+	err := tc.UpdateDDOperation(context.TODO(), ddOp, true)
+	if !strings.Contains(err.Error(), "update error") {
+		t.Fatalf("unexpected error:%s", err)
+	}
+
+	// now we execute our request
+	mock.ExpectExec("update").WillReturnResult(sqlmock.NewResult(0, 1))
+	err = tc.UpdateDDOperation(context.TODO(), ddOp, true)
+	if err != nil {
+		t.Fatalf("unexpected error:%s", err)
+	}
+}

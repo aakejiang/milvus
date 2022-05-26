@@ -532,11 +532,11 @@ func (kc *Catalog) ListCredentials(ctx context.Context) ([]string, error) {
 	return usernames, nil
 }
 
-func (kc *Catalog) UpdateDDOperation(ddOp model.DdOperation, isSent bool) error {
+func (kc *Catalog) UpdateDDOperation(ctx context.Context, ddOp model.DdOperation, isSent bool) error {
 	return kc.Txn.Save(metastore.DDMsgSendPrefix, strconv.FormatBool(true))
 }
 
-func (kc *Catalog) IsDDMsgSent() (bool, error) {
+func (kc *Catalog) IsDDMsgSent(ctx context.Context) (bool, error) {
 	value, err := kc.Txn.Load(metastore.DDMsgSendPrefix)
 	if err != nil {
 		log.Error("load dd-msg-send from kv failed", zap.Error(err))
@@ -550,7 +550,7 @@ func (kc *Catalog) IsDDMsgSent() (bool, error) {
 	return flag, nil
 }
 
-func (kc *Catalog) LoadDdOperation() (model.DdOperation, error) {
+func (kc *Catalog) LoadDdOperation(ctx context.Context) (model.DdOperation, error) {
 	ddOpStr, err := kc.Txn.Load(metastore.DDOperationPrefix)
 	if err != nil {
 		log.Error("load dd-operation from kv failed", zap.Error(err))

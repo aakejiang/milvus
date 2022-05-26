@@ -35,9 +35,9 @@ type Catalog interface {
 	DropCredential(ctx context.Context, username string) error
 	ListCredentials(ctx context.Context) ([]string, error)
 
-	IsDDMsgSent() (bool, error)
-	LoadDdOperation() (model.DdOperation, error)
-	UpdateDDOperation(ddOp model.DdOperation, isSent bool) error
+	IsDDMsgSent(ctx context.Context) (bool, error)
+	LoadDdOperation(ctx context.Context) (model.DdOperation, error)
+	UpdateDDOperation(ctx context.Context, ddOp model.DdOperation, isSent bool) error
 
 	Close()
 }

@@ -1096,13 +1096,13 @@ func (mt *MetaTable) ListCredentialUsernames() (*milvuspb.ListCredUsersResponse,
 }
 
 func (mt *MetaTable) UpdateDDOperation(ddOp model.DdOperation, isSent bool) error {
-	return mt.catalog.UpdateDDOperation(ddOp, isSent)
+	return mt.catalog.UpdateDDOperation(mt.ctx, ddOp, isSent)
 }
 
 func (mt *MetaTable) IsDDMsgSent() (bool, error) {
-	return mt.catalog.IsDDMsgSent()
+	return mt.catalog.IsDDMsgSent(mt.ctx)
 }
 
 func (mt *MetaTable) LoadDdOperation() (model.DdOperation, error) {
-	return mt.catalog.LoadDdOperation()
+	return mt.catalog.LoadDdOperation(mt.ctx)
 }

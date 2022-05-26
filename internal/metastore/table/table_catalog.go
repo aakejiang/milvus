@@ -609,15 +609,15 @@ func (tc *TableCatalog) ListCredentials(ctx context.Context) ([]string, error) {
 	return usernames, nil
 }
 
-func (tc *TableCatalog) IsDDMsgSent() (bool, error) {
-	ddOp, err := tc.LoadDdOperation()
+func (tc *TableCatalog) IsDDMsgSent(ctx context.Context) (bool, error) {
+	ddOp, err := tc.LoadDdOperation(ctx)
 	if err != nil {
 		return true, err
 	}
 	return ddOp.IsSent, nil
 }
 
-func (tc *TableCatalog) LoadDdOperation() (model.DdOperation, error) {
+func (tc *TableCatalog) LoadDdOperation(ctx context.Context) (model.DdOperation, error) {
 	var ddOp DdOperation
 	sql := "select * from dd_msg_send order by updated_at desc limit 1"
 	err := tc.DB.Get(&ddOp, sql)
@@ -629,7 +629,7 @@ func (tc *TableCatalog) LoadDdOperation() (model.DdOperation, error) {
 	return ConvertDdOperationDBToModel(ddOp), nil
 }
 
-func (tc *TableCatalog) UpdateDDOperation(ddOp model.DdOperation, isSent bool) error {
+func (tc *TableCatalog) UpdateDDOperation(ctx context.Context, ddOp model.DdOperation, isSent bool) error {
 	sql := "update dd_msg_send set is_sent=? where operation_type=? and operation_body=?"
 	_, err := tc.DB.Exec(sql, isSent, ddOp.Type, ddOp.Body)
 	if err != nil {
