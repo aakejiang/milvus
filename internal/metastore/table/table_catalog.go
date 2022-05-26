@@ -453,7 +453,7 @@ func (tc *TableCatalog) ListIndexes(ctx context.Context) ([]*model.Index, error)
 	return indexes, nil
 }
 
-func (tc *TableCatalog) CreateAlias(ctx context.Context, collection *model.Collection, ts typeutil.Timestamp) error {
+func (tc *TableCatalog) AddAlias(ctx context.Context, collection *model.Collection, ts typeutil.Timestamp) error {
 	coll, err := tc.GetCollectionByID(ctx, collection.CollectionID, ts)
 	if err != nil {
 		log.Error("get collection by ID failed", zap.Int64("collID", collection.CollectionID), zap.Uint64("ts", ts))
@@ -518,10 +518,6 @@ func (tc *TableCatalog) DropAlias(ctx context.Context, collectionID typeutil.Uni
 	log.Debug("table collections RowsAffected:", zap.Any("rows", n))
 
 	return nil
-}
-
-func (tc *TableCatalog) AlterAlias(ctx context.Context, collection *model.Collection, ts typeutil.Timestamp) error {
-	return tc.CreateAlias(ctx, collection, ts)
 }
 
 // ListAliases query collection ID and aliases only, other information are not needed

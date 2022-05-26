@@ -141,7 +141,7 @@ func (kc *Catalog) AlterIndex(ctx context.Context, oldIndex *model.Index, newInd
 	return nil
 }
 
-func (kc *Catalog) CreateAlias(ctx context.Context, collection *model.Collection, ts typeutil.Timestamp) error {
+func (kc *Catalog) AddAlias(ctx context.Context, collection *model.Collection, ts typeutil.Timestamp) error {
 	k := fmt.Sprintf("%s/%s", metastore.CollectionAliasMetaPrefix, collection.Aliases[0])
 	v, err := proto.Marshal(&pb.CollectionInfo{ID: collection.CollectionID, Schema: &schemapb.CollectionSchema{Name: collection.Aliases[0]}})
 	if err != nil {
@@ -209,10 +209,6 @@ func (kc *Catalog) GetCredential(ctx context.Context, username string) (*model.C
 		return nil, fmt.Errorf("unmarshal credential info err:%w", err)
 	}
 	return &model.Credential{Username: username, EncryptedPassword: credentialInfo.EncryptedPassword}, nil
-}
-
-func (kc *Catalog) AlterAlias(ctx context.Context, collection *model.Collection, ts typeutil.Timestamp) error {
-	return kc.CreateAlias(ctx, collection, ts)
 }
 
 func (kc *Catalog) DropCollection(ctx context.Context, collectionInfo *model.Collection, ts typeutil.Timestamp) error {

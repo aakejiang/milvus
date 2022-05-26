@@ -1017,7 +1017,7 @@ func (mt *MetaTable) AddAlias(collectionAlias string, collectionName string, ts 
 		CollectionID: id,
 		Aliases:      []string{collectionAlias},
 	}
-	return mt.catalog.CreateAlias(mt.ctx, coll, ts)
+	return mt.catalog.AddAlias(mt.ctx, coll, ts)
 }
 
 // DropAlias drop collection alias
@@ -1051,7 +1051,7 @@ func (mt *MetaTable) AlterAlias(collectionAlias string, collectionName string, t
 		CollectionID: id,
 		Aliases:      []string{collectionAlias},
 	}
-	return mt.catalog.AlterAlias(mt.ctx, coll, ts)
+	return mt.catalog.AddAlias(mt.ctx, coll, ts)
 }
 
 // IsAlias returns true if specific `collectionAlias` is an alias of collection.

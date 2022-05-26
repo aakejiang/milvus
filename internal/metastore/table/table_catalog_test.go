@@ -875,7 +875,7 @@ func TestCreateAlias(t *testing.T) {
 		CollectionID: collID,
 		Aliases:      []string{aliasName1, aliasName2},
 	}
-	err := tc.CreateAlias(context.TODO(), coll, ts)
+	err := tc.AddAlias(context.TODO(), coll, ts)
 	if err != nil {
 		t.Fatalf("unexpected error:%s", err)
 	}
@@ -899,7 +899,7 @@ func TestCreateAlias_ReturnError1(t *testing.T) {
 		CollectionID: collID,
 		Aliases:      []string{aliasName1, aliasName2},
 	}
-	err := tc.CreateAlias(context.TODO(), coll, ts)
+	err := tc.AddAlias(context.TODO(), coll, ts)
 	if !strings.Contains(err.Error(), "update error") {
 		t.Fatalf("unexpected error:%s", err)
 	}
@@ -920,7 +920,7 @@ func TestCreateAlias_ReturnError2(t *testing.T) {
 		CollectionID: collID,
 		Aliases:      []string{aliasName1, aliasName2},
 	}
-	err := tc.CreateAlias(context.TODO(), coll, ts)
+	err := tc.AddAlias(context.TODO(), coll, ts)
 	if !strings.Contains(err.Error(), errMsg) {
 		t.Fatalf("unexpected error:%s", err)
 	}
@@ -980,7 +980,7 @@ func TestAlterAlias(t *testing.T) {
 		CollectionID: collID,
 		Aliases:      []string{aliasName1, aliasName2},
 	}
-	err := tc.AlterAlias(context.TODO(), coll, ts)
+	err := tc.AddAlias(context.TODO(), coll, ts)
 	if err != nil {
 		t.Fatalf("unexpected error:%s", err)
 	}
