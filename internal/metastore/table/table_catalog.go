@@ -18,10 +18,20 @@ type TableCatalog struct {
 	DB *sqlx.DB
 }
 
+const sqlJoin = `select
+		collections.*,
+		field_schemas.field_id, field_schemas.field_name, field_schemas.is_primary_key, field_schemas.description, field_schemas.data_type, field_schemas.type_params, field_schemas.auto_id,
+		partitions.partition_id, partitions.partition_name, partitions.partition_created_timestamp,
+		IFNULL(indexes.field_id, 0), IFNULL(indexes.index_id, 0), IFNULL(indexes.index_name, ""), IFNULL(indexes.index_params, "")
+		from collections
+		left join field_schemas on collections.collection_id = field_schemas.collection_id and collections.ts = field_schemas.ts and field_schemas.is_deleted=false
+		left join partitions on collections.collection_id = partitions.collection_id and collections.ts = partitions.ts and partitions.is_deleted=false
+		left join indexes on collections.collection_id = indexes.collection_id and indexes.is_deleted=false`
+
 func (tc *TableCatalog) CreateCollection(ctx context.Context, collection *model.Collection, ts typeutil.Timestamp) error {
 	return WithTransaction(tc.DB, func(tx Transaction) error {
 		// sql 1
-		sqlStr1 := "insert into collections(tenant_id, collection_id, collection_name, collection_alias, description, auto_id, ts, properties) values (?,?,?,?,?,?,?)"
+		sqlStr1 := "insert into collections(tenant_id, collection_id, collection_name, collection_alias, description, auto_id, ts, properties) values (?,?,?,?,?,?,?,?)"
 		aliasesBytes, err := json.Marshal(collection.Aliases)
 		aliasesStr := string(aliasesBytes)
 		if err != nil {
@@ -58,15 +68,15 @@ func (tc *TableCatalog) CreateCollection(ctx context.Context, collection *model.
 			}
 			indexParamsStr := string(indexParamsBytes)
 			f := Field{
-				FieldID:      &field.FieldID,
-				FieldName:    &field.Name,
+				FieldID:      field.FieldID,
+				FieldName:    field.Name,
 				IsPrimaryKey: field.IsPrimaryKey,
 				Description:  &field.Description,
 				DataType:     field.DataType,
 				TypeParams:   &typeParamsStr,
 				IndexParams:  &indexParamsStr,
 				AutoID:       field.AutoID,
-				CollectionID: &collection.CollectionID,
+				CollectionID: collection.CollectionID,
 				Ts:           ts,
 			}
 			fields = append(fields, f)
@@ -82,10 +92,10 @@ func (tc *TableCatalog) CreateCollection(ctx context.Context, collection *model.
 		var partitions []Partition
 		for _, partition := range collection.Partitions {
 			p := Partition{
-				PartitionID:               &partition.PartitionID,
-				PartitionName:             &partition.PartitionName,
-				PartitionCreatedTimestamp: &partition.PartitionCreatedTimestamp,
-				CollectionID:              &collection.CollectionID,
+				PartitionID:               partition.PartitionID,
+				PartitionName:             partition.PartitionName,
+				PartitionCreatedTimestamp: partition.PartitionCreatedTimestamp,
+				CollectionID:              collection.CollectionID,
 				Ts:                        ts,
 			}
 			partitions = append(partitions, p)
@@ -100,7 +110,7 @@ func (tc *TableCatalog) CreateCollection(ctx context.Context, collection *model.
 		if ddOpStr, ok := collection.Extra[metastore.DDOperationPrefix]; ok {
 			sqlStr4 := "insert into dd_msg_send(operation_type, operation_body, is_sent) values (?,?,?)"
 			var ddOp = ddOpStr.(model.DdOperation)
-			isDDMsgSent := "false"
+			isDDMsgSent := false
 			_, err = tx.Exec(sqlStr4, ddOp.Type, ddOp.Body, isDDMsgSent)
 			if err != nil {
 				log.Error("insert dd_msg_send failed", zap.Error(err))
@@ -113,19 +123,14 @@ func (tc *TableCatalog) CreateCollection(ctx context.Context, collection *model.
 }
 
 func (tc *TableCatalog) GetCollectionByID(ctx context.Context, collectionID typeutil.UniqueID, ts typeutil.Timestamp) (*model.Collection, error) {
-	sqlStr := "select c.*, f.*, p.*, i.* " +
-		" from collections c " +
-		" left join field_schemas f on c.collection_id = f.collection_id and c.ts = f.ts and f.is_deleted=false " +
-		" left join partitions p on c.collection_id = p.collection_id and c.ts = p.ts and p.is_deleted=false " +
-		" left join indexes i on c.collection_id = i.collection_id and i.is_deleted=false " +
-		" where c.is_deleted=false and c.collection_id=? and c.ts=?"
+	sqlStr := sqlJoin + " where collections.is_deleted=false and collections.collection_id=? and collections.ts=?"
 	var result []struct {
-		Collection `db:"c"`
-		Partition  `db:"p"`
-		Field      `db:"f"`
-		Index      `db:"i"`
+		Collection
+		Partition
+		Field
+		Index
 	}
-	err := tc.DB.Select(&result, sqlStr, collectionID, ts)
+	err := tc.DB.Unsafe().Select(&result, sqlStr, collectionID, ts)
 	if err != nil {
 		log.Error("get collection by id failed", zap.Int64("collID", collectionID), zap.Uint64("ts", ts), zap.Error(err))
 		return nil, err
@@ -139,7 +144,7 @@ func (tc *TableCatalog) GetCollectionByID(ctx context.Context, collectionID type
 	collMap := ConvertCollectionsToIDMap(colls)
 	if _, ok := collMap[collectionID]; !ok {
 		log.Error("not found collection in the map", zap.Int64("collID", collectionID), zap.Uint64("ts", ts), zap.Error(err))
-		return nil, fmt.Errorf("not found collection %d in the map", collectionID)
+		return nil, fmt.Errorf("not found collectionId %d in the map, ts = %d", collectionID, ts)
 	}
 	return collMap[collectionID], nil
 }
@@ -165,19 +170,14 @@ func (tc *TableCatalog) GetCollectionByName(ctx context.Context, collectionName 
 }
 
 func (tc *TableCatalog) ListCollections(ctx context.Context, ts typeutil.Timestamp) (map[string]*model.Collection, error) {
-	sqlStr := "select c.*, f.*, p.*, i.* " +
-		" from collections c " +
-		" left join field_schemas f on c.collection_id = f.collection_id and c.ts = f.ts and f.is_deleted=false " +
-		" left join partitions p on c.collection_id = p.collection_id and c.ts = p.ts and p.is_deleted=false " +
-		" left join indexes i on c.collection_id = i.collection_id and i.is_deleted=false " +
-		" where c.is_deleted=false and c.ts=?"
+	sqlStr := sqlJoin + " where collections.is_deleted=false and collections.ts=?"
 	var result []struct {
-		Collection `db:"c"`
-		Partition  `db:"p"`
-		Field      `db:"f"`
-		Index      `db:"i"`
+		Collection
+		Partition
+		Field
+		Index
 	}
-	err := tc.DB.Select(&result, sqlStr, ts)
+	err := tc.DB.Unsafe().Select(&result, sqlStr, ts)
 	if err != nil {
 		log.Error("list collection failed", zap.Uint64("ts", ts), zap.Error(err))
 		return nil, err
@@ -279,7 +279,7 @@ func (tc *TableCatalog) DropCollection(ctx context.Context, collectionInfo *mode
 		if ddOpStr, ok := collectionInfo.Extra[metastore.DDOperationPrefix]; ok {
 			sqlStr6 := "insert into dd_msg_send(operation_type, operation_body, is_sent) values (?,?,?)"
 			var ddOp = ddOpStr.(model.DdOperation)
-			isDDMsgSent := "false"
+			isDDMsgSent := false
 			rs, err = tx.Exec(sqlStr6, ddOp.Type, ddOp.Body, isDDMsgSent)
 			if err != nil {
 				log.Error("insert dd_msg_send failed", zap.Error(err))
@@ -297,21 +297,17 @@ func (tc *TableCatalog) DropCollection(ctx context.Context, collectionInfo *mode
 	})
 }
 
-func (tc *TableCatalog) CreatePartition(ctx context.Context, coll *model.Collection, ts typeutil.Timestamp) error {
+func (tc *TableCatalog) CreatePartition(ctx context.Context, coll *model.Collection, partition *model.Partition, ts typeutil.Timestamp) error {
 	// sql 1
 	sqlStr1 := "insert into partitions(partition_id, partition_name, partition_created_timestamp, collection_id, ts) values (:partition_id, :partition_name, :partition_created_timestamp, :collection_id, :ts)"
-	var partitions []Partition
-	for _, partition := range coll.Partitions {
-		p := Partition{
-			PartitionID:               &partition.PartitionID,
-			PartitionName:             &partition.PartitionName,
-			PartitionCreatedTimestamp: &partition.PartitionCreatedTimestamp,
-			CollectionID:              &coll.CollectionID,
-			Ts:                        ts,
-		}
-		partitions = append(partitions, p)
+	p := Partition{
+		PartitionID:               partition.PartitionID,
+		PartitionName:             partition.PartitionName,
+		PartitionCreatedTimestamp: partition.PartitionCreatedTimestamp,
+		CollectionID:              coll.CollectionID,
+		Ts:                        ts,
 	}
-	_, err := tc.DB.NamedExec(sqlStr1, partitions)
+	_, err := tc.DB.NamedExec(sqlStr1, []Partition{p})
 	if err != nil {
 		log.Error("batch insert partitions failed", zap.Error(err))
 		return err
@@ -347,11 +343,11 @@ func (tc *TableCatalog) CreateIndex(ctx context.Context, col *model.Collection, 
 		}
 		indexParamsStr := string(indexParamsBytes)
 		idx := Index{
-			FieldID:      &index.FieldID,
-			CollectionID: &index.CollectionID,
-			IndexID:      &index.IndexID,
-			IndexName:    &index.IndexName,
-			IndexParams:  &indexParamsStr,
+			FieldID:      index.FieldID,
+			CollectionID: index.CollectionID,
+			IndexID:      index.IndexID,
+			IndexName:    index.IndexName,
+			IndexParams:  indexParamsStr,
 		}
 		_, err = tx.NamedExec(sqlStr1, idx)
 		if err != nil {
@@ -431,15 +427,17 @@ func (tc *TableCatalog) DropIndex(ctx context.Context, collectionInfo *model.Col
 }
 
 func (tc *TableCatalog) ListIndexes(ctx context.Context) ([]*model.Index, error) {
-	sqlStr := "select index_id, index_name, index_params " +
-		" from indexes i " +
-		" left join segment_indexes si on i.index_id = si.index_id and f.is_deleted = false " +
-		" where i.is_deleted=false"
+	sqlStr := `select
+		segment_indexes.*,
+    	indexes.field_id, indexes.collection_id, indexes.index_id, indexes.index_name, indexes.index_params
+		from indexes
+		left join segment_indexes on indexes.index_id = segment_indexes.index_id and segment_indexes.is_deleted = false
+		where indexes.is_deleted=false`
 	var result []struct {
 		Index
 		SegmentIndex
 	}
-	err := tc.DB.Select(&result, sqlStr)
+	err := tc.DB.Unsafe().Select(&result, sqlStr)
 	if err != nil {
 		log.Error("list indexes failed", zap.Error(err))
 		return nil, err

@@ -94,9 +94,6 @@ func ConvertCollectionsToNameMap(colls []*model.Collection) map[string]*model.Co
 }
 
 func ConvertFieldDBToModel(field *Field) *model.Field {
-	if field.FieldID == nil || field.FieldName == nil {
-		return nil
-	}
 	var retDescription string
 	if field.Description != nil {
 		retDescription = *field.Description
@@ -116,8 +113,8 @@ func ConvertFieldDBToModel(field *Field) *model.Field {
 		}
 	}
 	return &model.Field{
-		FieldID:      *field.FieldID,
-		Name:         *field.FieldName,
+		FieldID:      field.FieldID,
+		Name:         field.FieldName,
 		IsPrimaryKey: field.IsPrimaryKey,
 		Description:  retDescription,
 		DataType:     field.DataType,
@@ -128,32 +125,24 @@ func ConvertFieldDBToModel(field *Field) *model.Field {
 }
 
 func ConvertPartitionDBToModel(partiton *Partition) *model.Partition {
-	if partiton.PartitionID == nil || partiton.PartitionName == nil {
-		return nil
-	}
 	return &model.Partition{
-		PartitionID:               *partiton.PartitionID,
-		PartitionName:             *partiton.PartitionName,
-		PartitionCreatedTimestamp: *partiton.PartitionCreatedTimestamp,
+		PartitionID:               partiton.PartitionID,
+		PartitionName:             partiton.PartitionName,
+		PartitionCreatedTimestamp: partiton.PartitionCreatedTimestamp,
 	}
 }
 
 func ConvertIndexDBToModel(index *Index) *model.Index {
-	if index.IndexID == nil {
-		return nil
-	}
 	var indexParams []*commonpb.KeyValuePair
-	if index.IndexParams != nil {
-		err := json.Unmarshal([]byte(*index.IndexParams), indexParams)
-		if err != nil {
-			log.Error("unmarshal IndexParams of field failed", zap.Error(err))
-		}
+	err := json.Unmarshal([]byte(index.IndexParams), indexParams)
+	if err != nil {
+		log.Error("unmarshal IndexParams of field failed", zap.String("IndexParams", index.IndexParams), zap.Error(err))
 	}
 	return &model.Index{
-		CollectionID: *index.CollectionID,
-		FieldID:      *index.FieldID,
-		IndexID:      *index.IndexID,
-		IndexName:    *index.IndexName,
+		CollectionID: index.CollectionID,
+		FieldID:      index.FieldID,
+		IndexID:      index.IndexID,
+		IndexName:    index.IndexName,
 		IndexParams:  indexParams,
 	}
 }
@@ -185,22 +174,17 @@ func ConvertSegmentIndexDBToModel(segmentIndex *SegmentIndex) *model.SegmentInde
 }
 
 func ConvertToIndexModel(index *Index, segmentIndex *SegmentIndex) *model.Index {
-	if index.IndexID == nil {
-		return nil
-	}
 	var indexParams []*commonpb.KeyValuePair
-	if index.IndexParams != nil {
-		err := json.Unmarshal([]byte(*index.IndexParams), indexParams)
-		if err != nil {
-			log.Error("unmarshal IndexParams of field failed", zap.Error(err))
-		}
+	err := json.Unmarshal([]byte(index.IndexParams), indexParams)
+	if err != nil {
+		log.Error("unmarshal IndexParams of field failed", zap.Error(err))
 	}
 	segIndex := ConvertSegmentIndexDBToModel(segmentIndex)
 	return &model.Index{
-		CollectionID:   *index.CollectionID,
-		FieldID:        *index.FieldID,
-		IndexID:        *index.IndexID,
-		IndexName:      *index.IndexName,
+		CollectionID:   index.CollectionID,
+		FieldID:        index.FieldID,
+		IndexID:        index.IndexID,
+		IndexName:      index.IndexName,
 		IndexParams:    indexParams,
 		SegmentIndexes: []model.SegmentIndex{*segIndex},
 	}

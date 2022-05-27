@@ -245,10 +245,10 @@ func TestGetCollectionByID(t *testing.T) {
 	collTimestamp := 433286016553713676
 	var partCreatedTimestamp uint64 = 433286016527499280
 	rows := sqlmock.NewRows(
-		[]string{"c.id", "c.tenant_id", "c.collection_id", "c.collection_name", "c.collection_alias", "c.description", "c.auto_id", "c.ts", "c.properties", "c.is_deleted",
-			"p.id", "p.partition_id", "p.partition_name", "p.partition_created_timestamp", "p.collection_id", "p.ts", "p.is_deleted", "p.created_at", "p.updated_at",
-			"f.id", "f.field_id", "f.field_name", "f.collection_id",
-			"i.id", "i.field_id", "i.collection_id", "i.index_id", "i.index_name", "i.index_params",
+		[]string{"id", "tenant_id", "collection_id", "collection_name", "collection_alias", "description", "auto_id", "ts", "properties", "is_deleted",
+			"id", "partition_id", "partition_name", "partition_created_timestamp", "collection_id", "ts", "is_deleted", "created_at", "updated_at",
+			"id", "field_id", "field_name", "collection_id",
+			"id", "field_id", "collection_id", "index_id", "index_name", "index_params",
 		},
 	).AddRow([]driver.Value{1, tenantID, collID, collName, string(aliasesBytes), "", false, collTimestamp, "{}", false,
 		10, partID, partName, partCreatedTimestamp, collID, 433286016461963275, false, time.Now(), time.Now(),
@@ -334,9 +334,9 @@ func TestListCollections(t *testing.T) {
 	collTimestamp := 433286016553713676
 	var partCreatedTimestamp uint64 = 433286016527499280
 	rows := sqlmock.NewRows(
-		[]string{"c.id", "c.tenant_id", "c.collection_id", "c.collection_name", "c.collection_alias", "c.description", "c.auto_id", "c.ts", "c.properties", "c.is_deleted",
-			"p.id", "p.partition_id", "p.partition_name", "p.partition_created_timestamp", "p.collection_id", "p.ts", "p.is_deleted", "p.created_at", "p.updated_at",
-			"f.id", "f.field_id", "f.field_name"},
+		[]string{"id", "tenant_id", "collection_id", "collection_name", "collection_alias", "description", "auto_id", "ts", "properties", "is_deleted",
+			"id", "partition_id", "partition_name", "partition_created_timestamp", "collection_id", "ts", "is_deleted", "created_at", "updated_at",
+			"id", "field_id", "field_name"},
 	).AddRow([]driver.Value{1, tenantID, collID, collName, string(aliasesBytes), "", false, collTimestamp, "{}", false,
 		10, partID, partName, partCreatedTimestamp, collID, 433286016461963275, false, time.Now(), time.Now(),
 		1000, fieldID, fieldName}...)
@@ -611,17 +611,22 @@ func TestCreatePartition(t *testing.T) {
 	defer tc.DB.Close()
 
 	insertSql := "insert into partitions"
+	partition := &model.Partition{
+		PartitionID:               partID,
+		PartitionName:             partName,
+		PartitionCreatedTimestamp: ts,
+	}
 
 	// mock normal
 	mock.ExpectExec(insertSql).WillReturnResult(sqlmock.NewResult(1, 2))
-	if err := tc.CreatePartition(context.TODO(), collInfo, ts); err != nil {
+	if err := tc.CreatePartition(context.TODO(), collInfo, partition, ts); err != nil {
 		t.Errorf("error was not expected while creating collection: %s", err)
 	}
 
 	// mock update error
 	errMsg := "insert sql failed"
 	mock.ExpectExec(insertSql).WillReturnError(errors.New(errMsg))
-	err := tc.CreatePartition(context.TODO(), collInfo, ts)
+	err := tc.CreatePartition(context.TODO(), collInfo, partition, ts)
 	if !strings.Contains(err.Error(), errMsg) {
 		t.Fatalf("unexpected error:%s", err)
 	}
@@ -860,21 +865,22 @@ func TestListIndexes(t *testing.T) {
 	}
 }
 
-func TestCreateAlias(t *testing.T) {
+func TestAddAlias(t *testing.T) {
 	mock, tc := getMock(t)
 	defer tc.DB.Close()
 
 	rows := sqlmock.NewRows(
-		[]string{"c.id", "c.tenant_id", "c.collection_id", "c.collection_name", "c.collection_alias"},
+		[]string{"id", "tenant_id", "collection_id", "collection_name", "collection_alias"},
 	).AddRow([]driver.Value{1, tenantID, collID, collName, nil}...)
-	mock.ExpectQuery("select").WithArgs(collID, ts).WillReturnRows(rows)
-	mock.ExpectExec("update collections").WillReturnResult(sqlmock.NewResult(0, 1))
 
-	// now we execute our request
 	coll := &model.Collection{
 		CollectionID: collID,
 		Aliases:      []string{aliasName1, aliasName2},
 	}
+
+	// normal
+	mock.ExpectQuery("select").WithArgs(collID, ts).WillReturnRows(rows)
+	mock.ExpectExec("update collections").WillReturnResult(sqlmock.NewResult(0, 1))
 	err := tc.AddAlias(context.TODO(), coll, ts)
 	if err != nil {
 		t.Fatalf("unexpected error:%s", err)
@@ -884,42 +890,45 @@ func TestCreateAlias(t *testing.T) {
 	}
 }
 
-func TestCreateAlias_ReturnError1(t *testing.T) {
+func TestAddAlias_ReturnError(t *testing.T) {
 	mock, tc := getMock(t)
 	defer tc.DB.Close()
 
 	rows := sqlmock.NewRows(
-		[]string{"c.id", "c.tenant_id", "c.collection_id", "c.collection_name", "c.collection_alias"},
+		[]string{"id", "tenant_id", "collection_id", "collection_name", "collection_alias"},
 	).AddRow([]driver.Value{1, tenantID, collID, collName, nil}...)
-	mock.ExpectQuery("select").WithArgs(collID, ts).WillReturnRows(rows)
-	mock.ExpectExec("update collections").WillReturnError(errors.New("update error"))
 
-	// now we execute our request
 	coll := &model.Collection{
 		CollectionID: collID,
 		Aliases:      []string{aliasName1, aliasName2},
 	}
+
+	// mock return error
+	mock.ExpectQuery("select").WithArgs(collID, ts).WillReturnRows(rows)
+	mock.ExpectExec("update collections").WillReturnError(errors.New("update error"))
 	err := tc.AddAlias(context.TODO(), coll, ts)
 	if !strings.Contains(err.Error(), "update error") {
 		t.Fatalf("unexpected error:%s", err)
 	}
 }
-func TestCreateAlias_ReturnError2(t *testing.T) {
+
+func TestAddAlias_ErrorResult(t *testing.T) {
 	mock, tc := getMock(t)
 	defer tc.DB.Close()
 
 	rows := sqlmock.NewRows(
-		[]string{"c.id", "c.tenant_id", "c.collection_id", "c.collection_name", "c.collection_alias"},
+		[]string{"id", "tenant_id", "collection_id", "collection_name", "collection_alias"},
 	).AddRow([]driver.Value{1, tenantID, collID, collName, nil}...)
-	errMsg := "get sql RowsAffected failed"
-	mock.ExpectQuery("select").WithArgs(collID, ts).WillReturnRows(rows)
-	mock.ExpectExec("update collections").WillReturnResult(sqlmock.NewErrorResult(errors.New(errMsg)))
 
-	// mock sql result error
 	coll := &model.Collection{
 		CollectionID: collID,
 		Aliases:      []string{aliasName1, aliasName2},
 	}
+
+	// mock error result
+	errMsg := "get sql RowsAffected failed"
+	mock.ExpectQuery("select").WithArgs(collID, ts).WillReturnRows(rows)
+	mock.ExpectExec("update collections").WillReturnResult(sqlmock.NewErrorResult(errors.New(errMsg)))
 	err := tc.AddAlias(context.TODO(), coll, ts)
 	if !strings.Contains(err.Error(), errMsg) {
 		t.Fatalf("unexpected error:%s", err)
@@ -932,12 +941,12 @@ func TestDropAlias(t *testing.T) {
 
 	aliasesBytes, _ := json.Marshal([]string{aliasName1, aliasName2})
 	rows := sqlmock.NewRows(
-		[]string{"c.id", "c.tenant_id", "c.collection_id", "c.collection_name", "c.collection_alias"},
+		[]string{"id", "tenant_id", "collection_id", "collection_name", "collection_alias"},
 	).AddRow([]driver.Value{1, tenantID, collID, collName, string(aliasesBytes)}...)
+
+	// normal
 	mock.ExpectQuery("select").WithArgs(collID, ts).WillReturnRows(rows)
 	mock.ExpectExec("update collections").WillReturnResult(sqlmock.NewResult(0, 1))
-
-	// now we execute our request
 	err := tc.DropAlias(context.TODO(), collID, aliasName1, ts)
 	if err != nil {
 		t.Fatalf("unexpected error:%s", err)
@@ -947,45 +956,21 @@ func TestDropAlias(t *testing.T) {
 	}
 }
 
-func TestDropAlias_Error(t *testing.T) {
+func TestDropAlias_ERROR(t *testing.T) {
 	mock, tc := getMock(t)
 	defer tc.DB.Close()
 
 	aliasesBytes, _ := json.Marshal([]string{aliasName1, aliasName2})
 	rows := sqlmock.NewRows(
-		[]string{"c.id", "c.tenant_id", "c.collection_id", "c.collection_name", "c.collection_alias"},
+		[]string{"id", "tenant_id", "collection_id", "collection_name", "collection_alias"},
 	).AddRow([]driver.Value{1, tenantID, collID, collName, string(aliasesBytes)}...)
+
+	// mock error
 	mock.ExpectQuery("select").WithArgs(collID, ts).WillReturnRows(rows)
 	mock.ExpectExec("update collections").WillReturnError(errors.New("update error"))
-
-	// now we execute our request
 	err := tc.DropAlias(context.TODO(), collID, aliasName1, ts)
 	if !strings.Contains(err.Error(), "update error") {
 		t.Fatalf("unexpected error:%s", err)
-	}
-}
-
-func TestAlterAlias(t *testing.T) {
-	mock, tc := getMock(t)
-	defer tc.DB.Close()
-
-	rows := sqlmock.NewRows(
-		[]string{"c.id", "c.tenant_id", "c.collection_id", "c.collection_name", "c.collection_alias"},
-	).AddRow([]driver.Value{1, tenantID, collID, collName, nil}...)
-	mock.ExpectQuery("select").WithArgs(collID, ts).WillReturnRows(rows)
-	mock.ExpectExec("update collections").WillReturnResult(sqlmock.NewResult(0, 1))
-
-	// now we execute our request
-	coll := &model.Collection{
-		CollectionID: collID,
-		Aliases:      []string{aliasName1, aliasName2},
-	}
-	err := tc.AddAlias(context.TODO(), coll, ts)
-	if err != nil {
-		t.Fatalf("unexpected error:%s", err)
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Errorf("there were unfulfilled expectations: %s", err)
 	}
 }
 

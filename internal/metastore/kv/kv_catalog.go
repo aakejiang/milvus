@@ -57,7 +57,7 @@ func (kc *Catalog) CreateCollection(ctx context.Context, coll *model.Collection,
 	return nil
 }
 
-func (kc *Catalog) CreatePartition(ctx context.Context, coll *model.Collection, ts typeutil.Timestamp) error {
+func (kc *Catalog) CreatePartition(ctx context.Context, coll *model.Collection, partition *model.Partition, ts typeutil.Timestamp) error {
 	k1 := fmt.Sprintf("%s/%d", metastore.CollectionMetaPrefix, coll.CollectionID)
 	collInfo := ConvertToCollectionPB(coll)
 	v1, err := proto.Marshal(collInfo)

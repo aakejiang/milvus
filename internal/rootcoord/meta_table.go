@@ -402,12 +402,12 @@ func (mt *MetaTable) AddPartition(collID typeutil.UniqueID, partitionName string
 		// no necessary to check created timestamp
 	}
 
-	coll.Partitions = append(coll.Partitions,
-		&model.Partition{
-			PartitionID:               partitionID,
-			PartitionName:             partitionName,
-			PartitionCreatedTimestamp: ts,
-		})
+	partition := &model.Partition{
+		PartitionID:               partitionID,
+		PartitionName:             partitionName,
+		PartitionCreatedTimestamp: ts,
+	}
+	coll.Partitions = append(coll.Partitions, partition)
 	mt.collID2Meta[collID] = coll
 
 	metaTxn := map[string]interface{}{}
@@ -416,7 +416,7 @@ func (mt *MetaTable) AddPartition(collID typeutil.UniqueID, partitionName string
 	metaTxn[metastore.DDOperationPrefix] = ddOp
 	coll.Extra = metaTxn
 
-	return mt.catalog.CreatePartition(mt.ctx, &coll, ts)
+	return mt.catalog.CreatePartition(mt.ctx, &coll, partition, ts)
 }
 
 // GetPartitionNameByID return partition name by partition id

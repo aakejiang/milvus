@@ -15,7 +15,7 @@ type Catalog interface {
 	CollectionExists(ctx context.Context, collectionID typeutil.UniqueID, ts typeutil.Timestamp) bool
 	DropCollection(ctx context.Context, collectionInfo *model.Collection, ts typeutil.Timestamp) error
 
-	CreatePartition(ctx context.Context, coll *model.Collection, ts typeutil.Timestamp) error
+	CreatePartition(ctx context.Context, coll *model.Collection, partition *model.Partition, ts typeutil.Timestamp) error
 	//GetPartition(ctx context.Context, collectionName string, partitionName string) (*model.Partition, error)
 	//GetPartitionWithVersion(ctx context.Context, collectionName string, partitionName string, version int) (model.Partition, error)
 	DropPartition(ctx context.Context, collectionInfo *model.Collection, partitionID typeutil.UniqueID, ts typeutil.Timestamp) error
