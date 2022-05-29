@@ -19,14 +19,14 @@ type TableCatalog struct {
 }
 
 const sqlJoin = `select
-		collections.*,
-		field_schemas.field_id, field_schemas.field_name, field_schemas.is_primary_key, field_schemas.description, field_schemas.data_type, field_schemas.type_params, field_schemas.auto_id,
-		partitions.partition_id, partitions.partition_name, partitions.partition_created_timestamp,
-		IFNULL(indexes.field_id, 0), IFNULL(indexes.index_id, 0), IFNULL(indexes.index_name, ""), IFNULL(indexes.index_params, "")
-		from collections
-		left join field_schemas on collections.collection_id = field_schemas.collection_id and collections.ts = field_schemas.ts and field_schemas.is_deleted=false
-		left join partitions on collections.collection_id = partitions.collection_id and collections.ts = partitions.ts and partitions.is_deleted=false
-		left join indexes on collections.collection_id = indexes.collection_id and indexes.is_deleted=false`
+collections.*,
+field_schemas.field_id, field_schemas.field_name, field_schemas.is_primary_key, field_schemas.description, field_schemas.data_type, field_schemas.type_params, field_schemas.auto_id,
+partitions.partition_id, partitions.partition_name, partitions.partition_created_timestamp,
+IFNULL(indexes.field_id, 0), IFNULL(indexes.index_id, 0), IFNULL(indexes.index_name, ""), IFNULL(indexes.index_params, "")
+from collections
+left join field_schemas on collections.collection_id = field_schemas.collection_id and collections.ts = field_schemas.ts and field_schemas.is_deleted=false
+left join partitions on collections.collection_id = partitions.collection_id and collections.ts = partitions.ts and partitions.is_deleted=false
+left join indexes on collections.collection_id = indexes.collection_id and indexes.is_deleted=false`
 
 func (tc *TableCatalog) CreateCollection(ctx context.Context, collection *model.Collection, ts typeutil.Timestamp) error {
 	return WithTransaction(tc.DB, func(tx Transaction) error {
@@ -81,10 +81,12 @@ func (tc *TableCatalog) CreateCollection(ctx context.Context, collection *model.
 			}
 			fields = append(fields, f)
 		}
-		_, err = tx.NamedExec(sqlStr2, fields)
-		if err != nil {
-			log.Error("batch insert field_schemas failed", zap.Error(err))
-			return err
+		if len(fields) != 0 {
+			_, err = tx.NamedExec(sqlStr2, fields)
+			if err != nil {
+				log.Error("insert field_schemas failed", zap.Error(err))
+				return err
+			}
 		}
 
 		// sql 3
@@ -102,7 +104,7 @@ func (tc *TableCatalog) CreateCollection(ctx context.Context, collection *model.
 		}
 		_, err = tx.NamedExec(sqlStr3, partitions)
 		if err != nil {
-			log.Error("batch insert partitions failed", zap.Error(err))
+			log.Error("insert partitions failed", zap.Error(err))
 			return err
 		}
 
@@ -123,14 +125,20 @@ func (tc *TableCatalog) CreateCollection(ctx context.Context, collection *model.
 }
 
 func (tc *TableCatalog) GetCollectionByID(ctx context.Context, collectionID typeutil.UniqueID, ts typeutil.Timestamp) (*model.Collection, error) {
-	sqlStr := sqlJoin + " where collections.is_deleted=false and collections.collection_id=? and collections.ts=?"
 	var result []struct {
 		Collection
 		Partition
 		Field
 		Index
 	}
-	err := tc.DB.Unsafe().Select(&result, sqlStr, collectionID, ts)
+	sqlStr := sqlJoin + " where collections.is_deleted=false and collections.collection_id=?"
+	var err error
+	if ts > 0 {
+		sqlStr = sqlStr + " and collections.ts<=?"
+		err = tc.DB.Unsafe().Select(&result, sqlStr, collectionID, ts)
+	} else {
+		err = tc.DB.Unsafe().Select(&result, sqlStr, collectionID)
+	}
 	if err != nil {
 		log.Error("get collection by id failed", zap.Int64("collID", collectionID), zap.Uint64("ts", ts), zap.Error(err))
 		return nil, err
@@ -150,9 +158,15 @@ func (tc *TableCatalog) GetCollectionByID(ctx context.Context, collectionID type
 }
 
 func (tc *TableCatalog) GetCollectionIDByName(ctx context.Context, collectionName string, ts typeutil.Timestamp) (typeutil.UniqueID, error) {
-	sqlStr := "select collection_id from collections where is_deleted=false and collection_name=? and ts=?"
+	sqlStr := "select collection_id from collections where is_deleted=false and collection_name=?"
 	var collID typeutil.UniqueID
-	err := tc.DB.Get(&collID, sqlStr, collectionName, ts)
+	var err error
+	if ts > 0 {
+		sqlStr = sqlStr + " and ts<=?"
+		err = tc.DB.Get(&collID, sqlStr, collectionName, ts)
+	} else {
+		err = tc.DB.Get(&collID, sqlStr, collectionName)
+	}
 	if err != nil {
 		log.Error("get collection id by name failed", zap.String("collName", collectionName), zap.Uint64("ts", ts), zap.Error(err))
 		return 0, err
@@ -170,14 +184,20 @@ func (tc *TableCatalog) GetCollectionByName(ctx context.Context, collectionName 
 }
 
 func (tc *TableCatalog) ListCollections(ctx context.Context, ts typeutil.Timestamp) (map[string]*model.Collection, error) {
-	sqlStr := sqlJoin + " where collections.is_deleted=false and collections.ts=?"
 	var result []struct {
 		Collection
 		Partition
 		Field
 		Index
 	}
-	err := tc.DB.Unsafe().Select(&result, sqlStr, ts)
+	sqlStr := sqlJoin + " where collections.is_deleted=false"
+	var err error
+	if ts > 0 {
+		sqlStr = sqlStr + " and collections.ts<=?"
+		err = tc.DB.Unsafe().Select(&result, sqlStr, ts)
+	} else {
+		err = tc.DB.Unsafe().Select(&result, sqlStr)
+	}
 	if err != nil {
 		log.Error("list collection failed", zap.Uint64("ts", ts), zap.Error(err))
 		return nil, err
@@ -192,9 +212,15 @@ func (tc *TableCatalog) ListCollections(ctx context.Context, ts typeutil.Timesta
 }
 
 func (tc *TableCatalog) CollectionExists(ctx context.Context, collectionID typeutil.UniqueID, ts typeutil.Timestamp) bool {
-	sqlStr := "select tenant_id, collection_id, collection_name, description, auto_id, ts, properties, created_time from collections where is_deleted=false and collection_id=? and ts=?"
+	sqlStr := "select tenant_id, collection_id, collection_name, description, auto_id, ts, properties, created_at from collections where is_deleted=false and collection_id=?"
 	var coll Collection
-	err := tc.DB.Get(&coll, sqlStr, collectionID, ts)
+	var err error
+	if ts > 0 {
+		sqlStr = sqlStr + " and ts<=?"
+		err = tc.DB.Get(&coll, sqlStr, collectionID, ts)
+	} else {
+		err = tc.DB.Get(&coll, sqlStr, collectionID)
+	}
 	if err != nil {
 		log.Error("get collection by ID failed", zap.Int64("collID", collectionID), zap.Uint64("ts", ts), zap.Error(err))
 		// Also, an error is returned if the result set is empty.
@@ -309,7 +335,7 @@ func (tc *TableCatalog) CreatePartition(ctx context.Context, coll *model.Collect
 	}
 	_, err := tc.DB.NamedExec(sqlStr1, []Partition{p})
 	if err != nil {
-		log.Error("batch insert partitions failed", zap.Error(err))
+		log.Error("insert partitions failed", zap.Error(err))
 		return err
 	}
 
