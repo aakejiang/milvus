@@ -324,39 +324,67 @@ func (tc *TableCatalog) DropCollection(ctx context.Context, collectionInfo *mode
 }
 
 func (tc *TableCatalog) CreatePartition(ctx context.Context, coll *model.Collection, partition *model.Partition, ts typeutil.Timestamp) error {
-	// sql 1
-	sqlStr1 := "insert into partitions(partition_id, partition_name, partition_created_timestamp, collection_id, ts) values (:partition_id, :partition_name, :partition_created_timestamp, :collection_id, :ts)"
-	p := Partition{
-		PartitionID:               partition.PartitionID,
-		PartitionName:             partition.PartitionName,
-		PartitionCreatedTimestamp: partition.PartitionCreatedTimestamp,
-		CollectionID:              coll.CollectionID,
-		Ts:                        ts,
-	}
-	_, err := tc.DB.NamedExec(sqlStr1, []Partition{p})
-	if err != nil {
-		log.Error("insert partitions failed", zap.Error(err))
-		return err
-	}
+	return WithTransaction(tc.DB, func(tx Transaction) error {
+		// sql 1
+		sqlStr1 := "insert into partitions(partition_id, partition_name, partition_created_timestamp, collection_id, ts) values (:partition_id, :partition_name, :partition_created_timestamp, :collection_id, :ts)"
+		p := Partition{
+			PartitionID:               partition.PartitionID,
+			PartitionName:             partition.PartitionName,
+			PartitionCreatedTimestamp: partition.PartitionCreatedTimestamp,
+			CollectionID:              coll.CollectionID,
+			Ts:                        ts,
+		}
+		_, err := tc.DB.NamedExec(sqlStr1, []Partition{p})
+		if err != nil {
+			log.Error("insert partitions failed", zap.Error(err))
+			return err
+		}
 
-	return nil
+		// sql 2
+		if ddOpStr, ok := coll.Extra[metastore.DDOperationPrefix]; ok {
+			sqlStr2 := "insert into dd_msg_send(operation_type, operation_body, is_sent) values (?,?,?)"
+			var ddOp = ddOpStr.(model.DdOperation)
+			isDDMsgSent := false
+			_, err = tx.Exec(sqlStr2, ddOp.Type, ddOp.Body, isDDMsgSent)
+			if err != nil {
+				log.Error("insert dd_msg_send failed", zap.Error(err))
+				return err
+			}
+		}
+
+		return nil
+	})
 }
 
 func (tc *TableCatalog) DropPartition(ctx context.Context, collection *model.Collection, partitionID typeutil.UniqueID, ts typeutil.Timestamp) error {
-	sqlStr1 := "update partitions set is_deleted=true where partition_id=? and ts=?"
-	rs, err := tc.DB.Exec(sqlStr1, partitionID, ts)
-	if err != nil {
-		log.Error("delete partition failed", zap.Error(err))
-		return err
-	}
-	n, err := rs.RowsAffected()
-	if err != nil {
-		log.Error("get RowsAffected failed", zap.Error(err))
-		return err
-	}
-	log.Debug("table partitions RowsAffected:", zap.Any("rows", n))
+	return WithTransaction(tc.DB, func(tx Transaction) error {
+		sqlStr1 := "update partitions set is_deleted=true where partition_id=? and ts=?"
+		rs, err := tc.DB.Exec(sqlStr1, partitionID, ts)
+		if err != nil {
+			log.Error("delete partition failed", zap.Error(err))
+			return err
+		}
+		n, err := rs.RowsAffected()
+		if err != nil {
+			log.Error("get RowsAffected failed", zap.Error(err))
+			return err
+		}
+		log.Debug("table partitions RowsAffected:", zap.Any("rows", n))
 
-	return nil
+		// sql 2
+		if ddOpStr, ok := collection.Extra[metastore.DDOperationPrefix]; ok {
+			sqlStr2 := "insert into dd_msg_send(operation_type, operation_body, is_sent) values (?,?,?)"
+			var ddOp = ddOpStr.(model.DdOperation)
+			isDDMsgSent := false
+			_, err = tx.Exec(sqlStr2, ddOp.Type, ddOp.Body, isDDMsgSent)
+			if err != nil {
+				log.Error("insert dd_msg_send failed", zap.Error(err))
+				return err
+			}
+		}
+
+		return nil
+	})
 }
 
 func (tc *TableCatalog) CreateIndex(ctx context.Context, col *model.Collection, index *model.Index) error {

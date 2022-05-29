@@ -101,6 +101,7 @@ func (m *mockTestTxnKV) Remove(key string) error {
 }
 
 func Test_MockKV(t *testing.T) {
+	Params.Init()
 	k1 := &mockTestKV{}
 	kt := &mockTestTxnKV{}
 	prefix := make(map[string][]string)

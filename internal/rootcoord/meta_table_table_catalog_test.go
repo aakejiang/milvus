@@ -369,9 +369,9 @@ func TestMetaTable_TableCatalog(t *testing.T) {
 		assert.Equal(t, partID, id)
 
 		// check DD operation flag
-		//flag, err := mt.txn.Load(metastore.DDMsgSendPrefix)
-		//assert.Nil(t, err)
-		//assert.Equal(t, "false", flag)
+		flag, err := mt.IsDDMsgSent()
+		assert.Nil(t, err)
+		assert.Equal(t, false, flag)
 	})
 
 	wg.Add(1)
@@ -387,9 +387,9 @@ func TestMetaTable_TableCatalog(t *testing.T) {
 		assert.NotNil(t, err)
 
 		// check DD operation flag
-		//flag, err := mt.txn.Load(metastore.DDMsgSendPrefix)
-		//assert.Nil(t, err)
-		//assert.Equal(t, "false", flag)
+		flag, err := mt.IsDDMsgSent()
+		assert.Nil(t, err)
+		assert.Equal(t, false, flag)
 	})
 
 	wg.Add(1)
