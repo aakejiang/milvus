@@ -610,7 +610,18 @@ func TestCreatePartition(t *testing.T) {
 	mock, tc := getMock(t)
 	defer tc.DB.Close()
 
-	insertSql := "insert into partitions"
+	insertSql1 := "insert into partitions"
+	insertSql2 := "insert into dd_msg_send"
+	ddOp, _ := metastore.ToDdOperation(&internalpb.CreateCollectionRequest{
+		CollectionName: collName,
+		PartitionName:  partName,
+		CollectionID:   collID,
+		PartitionID:    partID,
+	}, "DropCollection")
+	meta := map[string]interface{}{}
+	meta[metastore.DDMsgSendPrefix] = false
+	meta[metastore.DDOperationPrefix] = ddOp
+	collInfo.Extra = meta
 	partition := &model.Partition{
 		PartitionID:               partID,
 		PartitionName:             partName,
@@ -618,14 +629,19 @@ func TestCreatePartition(t *testing.T) {
 	}
 
 	// mock normal
-	mock.ExpectExec(insertSql).WillReturnResult(sqlmock.NewResult(1, 2))
+	mock.ExpectBegin()
+	mock.ExpectExec(insertSql1).WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec(insertSql2).WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
 	if err := tc.CreatePartition(context.TODO(), collInfo, partition, ts); err != nil {
 		t.Errorf("error was not expected while creating collection: %s", err)
 	}
 
 	// mock update error
 	errMsg := "insert sql failed"
-	mock.ExpectExec(insertSql).WillReturnError(errors.New(errMsg))
+	mock.ExpectBegin()
+	mock.ExpectExec(insertSql1).WillReturnError(errors.New(errMsg))
+	mock.ExpectRollback()
 	err := tc.CreatePartition(context.TODO(), collInfo, partition, ts)
 	if !strings.Contains(err.Error(), errMsg) {
 		t.Fatalf("unexpected error:%s", err)
@@ -637,35 +653,46 @@ func TestDropPartition(t *testing.T) {
 	defer tc.DB.Close()
 
 	updateSql := "update partitions"
+	insertSql := "insert into dd_msg_send"
+	ddOp, _ := metastore.ToDdOperation(&internalpb.CreateCollectionRequest{
+		CollectionName: collName,
+		PartitionName:  partName,
+		CollectionID:   collID,
+		PartitionID:    partID,
+	}, "DropCollection")
+	meta := map[string]interface{}{}
+	meta[metastore.DDMsgSendPrefix] = false
+	meta[metastore.DDOperationPrefix] = ddOp
+	collInfo.Extra = meta
 
 	// mock normal
-	mock.ExpectExec(updateSql).WillReturnResult(sqlmock.NewResult(1, 1))
-	if err := tc.DropPartition(context.TODO(), nil, partID, ts); err != nil {
-		t.Errorf("error was not expected while dropping collection: %s", err)
+	mock.ExpectBegin()
+	mock.ExpectExec(updateSql).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(insertSql).WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+	if err := tc.DropPartition(context.TODO(), collInfo, partID, ts); err != nil {
+		t.Errorf("error was not expected while dropping partition: %s", err)
 	}
 
 	// mock update error
 	errMsg := "update sql failed"
+	mock.ExpectBegin()
 	mock.ExpectExec(updateSql).WillReturnError(errors.New(errMsg))
-	err := tc.DropPartition(context.TODO(), nil, partID, ts)
+	mock.ExpectRollback()
+	err := tc.DropPartition(context.TODO(), collInfo, partID, ts)
 	if !strings.Contains(err.Error(), errMsg) {
 		t.Fatalf("unexpected error:%s", err)
 	}
 
 	// mock sql result error
 	errMsg = "get sql RowsAffected failed"
+	mock.ExpectBegin()
 	mock.ExpectExec(updateSql).WillReturnResult(sqlmock.NewErrorResult(errors.New(errMsg)))
-	err = tc.DropPartition(context.TODO(), nil, partID, ts)
+	mock.ExpectRollback()
+	err = tc.DropPartition(context.TODO(), collInfo, partID, ts)
 	if !strings.Contains(err.Error(), errMsg) {
 		t.Fatalf("unexpected error:%s", err)
 	}
-
-	// mock update RowsAffected is not 1
-	//mock.ExpectExec(updateSql).WillReturnResult(sqlmock.NewResult(0, 0))
-	//err = tc.DropPartition(context.TODO(), nil, partID, ts)
-	//if !strings.Contains(err.Error(), "RowsAffected is not 1") {
-	//    t.Fatalf("unexpected error:%s", err)
-	//}
 }
 
 func TestCreateIndex(t *testing.T) {
