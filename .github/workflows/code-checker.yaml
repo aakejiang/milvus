@@ -45,16 +45,16 @@ jobs:
         if: ${{  matrix.os == 'ubuntu-18.04' }}
         uses: actions/cache@v1
         with:
-          path: .docker/amd64-ubuntu18.04-ccache
-          key: ubuntu18.04-ccache-${{ hashFiles('internal/core/**') }}
-          restore-keys: ubuntu18.04-ccache-
+          path: .docker/amd64-ubuntu20.04-ccache
+          key: ubuntu20.04-ccache-${{ hashFiles('internal/core/**') }}
+          restore-keys: ubuntu20.04-ccache-
       - name: Cache Third Party
         if: ${{  matrix.os == 'ubuntu-18.04' }}
         uses: actions/cache@v1
         with:
           path: .docker/thirdparty
-          key: ubuntu18.04-thirdparty-${{ hashFiles('internal/core/**') }}
-          restore-keys: ubuntu18.04-thirdparty-
+          key: ubuntu20.04-thirdparty-${{ hashFiles('internal/core/**') }}
+          restore-keys: ubuntu20.04-thirdparty-
       - name: Mac Cache Third Party
         if: ${{  matrix.os == 'macos-11' }}
         uses: actions/cache@v1
@@ -75,9 +75,9 @@ jobs:
         if: ${{  matrix.os == 'ubuntu-18.04' }}
         uses: actions/cache@v1
         with:
-          path: .docker/amd64-ubuntu18.04-go-mod
-          key: ubuntu18.04-go-mod-${{ hashFiles('**/go.sum') }}
-          restore-keys: ubuntu18.04-go-mod-
+          path: .docker/amd64-ubuntu20.04-go-mod
+          key: ubuntu20.04-go-mod-${{ hashFiles('**/go.sum') }}
+          restore-keys: ubuntu20.04-go-mod-
       - name: Setup Go environment
         uses: actions/setup-go@v2.2.0
         if: ${{  matrix.os == 'macos-11' }}
