@@ -20,54 +20,54 @@ import (
 	"context"
 	"io"
 
+	rc "github.com/milvus-io/milvus/internal/distributed/rootcoord"
 	"github.com/milvus-io/milvus/internal/log"
 	"github.com/milvus-io/milvus/internal/proto/internalpb"
 	"github.com/milvus-io/milvus/internal/util/dependency"
-
 	"github.com/opentracing/opentracing-go"
-
-	rc "github.com/milvus-io/milvus/internal/distributed/rootcoord"
+	"go.uber.org/zap"
 )
 
 // RootCoord implements RoodCoord grpc server
 type RootCoord struct {
-	ctx context.Context
-	svr *rc.Server
+    ctx context.Context
+    svr *rc.Server
 
-	tracer opentracing.Tracer
-	closer io.Closer
+    tracer opentracing.Tracer
+    closer io.Closer
 }
 
 // NewRootCoord creates a new RoorCoord
 func NewRootCoord(ctx context.Context, factory dependency.Factory) (*RootCoord, error) {
-	svr, err := rc.NewServer(ctx, factory)
-	if err != nil {
-		return nil, err
-	}
-	return &RootCoord{
-		ctx: ctx,
-		svr: svr,
-	}, nil
+    svr, err := rc.NewServer(ctx, factory)
+    if err != nil {
+        return nil, err
+    }
+    return &RootCoord{
+        ctx: ctx,
+        svr: svr,
+    }, nil
 }
 
 // Run starts service
 func (rc *RootCoord) Run() error {
-	if err := rc.svr.Run(); err != nil {
-		return err
-	}
-	log.Debug("RootCoord successfully started")
-	return nil
+    if err := rc.svr.Run(); err != nil {
+        log.Error("RootCoord starts error", zap.Error(err))
+        return err
+    }
+    log.Debug("RootCoord successfully started")
+    return nil
 }
 
 // Stop terminates service
 func (rc *RootCoord) Stop() error {
-	if err := rc.svr.Stop(); err != nil {
-		return err
-	}
-	return nil
+    if err := rc.svr.Stop(); err != nil {
+        return err
+    }
+    return nil
 }
 
 // GetComponentStates returns RootCoord's states
 func (rc *RootCoord) GetComponentStates(ctx context.Context, request *internalpb.GetComponentStatesRequest) (*internalpb.ComponentStates, error) {
-	return rc.svr.GetComponentStates(ctx, request)
+    return rc.svr.GetComponentStates(ctx, request)
 }

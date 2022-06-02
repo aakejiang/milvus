@@ -2,6 +2,7 @@ package table
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 
@@ -110,13 +111,15 @@ func (tc *TableCatalog) CreateCollection(ctx context.Context, collection *model.
 
 		// sql 4
 		if ddOpStr, ok := collection.Extra[metastore.DDOperationPrefix]; ok {
-			sqlStr4 := "insert into dd_msg_send(operation_type, operation_body, is_sent) values (?,?,?)"
 			var ddOp = ddOpStr.(model.DdOperation)
-			isDDMsgSent := false
-			_, err = tx.Exec(sqlStr4, ddOp.Type, ddOp.Body, isDDMsgSent)
-			if err != nil {
-				log.Error("insert dd_msg_send failed", zap.Error(err))
-				return err
+			if ddOp.Type != "" && ddOp.Body != "" {
+				sqlStr4 := "insert into dd_msg_send(operation_type, operation_body, is_sent) values (?,?,?)"
+				isDDMsgSent := false
+				_, err = tx.Exec(sqlStr4, ddOp.Type, ddOp.Body, isDDMsgSent)
+				if err != nil {
+					log.Error("insert dd_msg_send failed", zap.Error(err))
+					return err
+				}
 			}
 		}
 
@@ -303,20 +306,22 @@ func (tc *TableCatalog) DropCollection(ctx context.Context, collectionInfo *mode
 
 		// sql 6
 		if ddOpStr, ok := collectionInfo.Extra[metastore.DDOperationPrefix]; ok {
-			sqlStr6 := "insert into dd_msg_send(operation_type, operation_body, is_sent) values (?,?,?)"
 			var ddOp = ddOpStr.(model.DdOperation)
-			isDDMsgSent := false
-			rs, err = tx.Exec(sqlStr6, ddOp.Type, ddOp.Body, isDDMsgSent)
-			if err != nil {
-				log.Error("insert dd_msg_send failed", zap.Error(err))
-				return err
+			if ddOp.Type != "" && ddOp.Body != "" {
+				sqlStr6 := "insert into dd_msg_send(operation_type, operation_body, is_sent) values (?,?,?)"
+				isDDMsgSent := false
+				rs, err = tx.Exec(sqlStr6, ddOp.Type, ddOp.Body, isDDMsgSent)
+				if err != nil {
+					log.Error("insert dd_msg_send failed", zap.Error(err))
+					return err
+				}
+				n, err = rs.RowsAffected()
+				if err != nil {
+					log.Error("get RowsAffected failed", zap.Error(err))
+					return err
+				}
+				log.Debug("table dd_msg_send RowsAffected", zap.Any("rows", n))
 			}
-			n, err = rs.RowsAffected()
-			if err != nil {
-				log.Error("get RowsAffected failed", zap.Error(err))
-				return err
-			}
-			log.Debug("table dd_msg_send RowsAffected", zap.Any("rows", n))
 		}
 
 		return err
@@ -342,13 +347,15 @@ func (tc *TableCatalog) CreatePartition(ctx context.Context, coll *model.Collect
 
 		// sql 2
 		if ddOpStr, ok := coll.Extra[metastore.DDOperationPrefix]; ok {
-			sqlStr2 := "insert into dd_msg_send(operation_type, operation_body, is_sent) values (?,?,?)"
 			var ddOp = ddOpStr.(model.DdOperation)
-			isDDMsgSent := false
-			_, err = tx.Exec(sqlStr2, ddOp.Type, ddOp.Body, isDDMsgSent)
-			if err != nil {
-				log.Error("insert dd_msg_send failed", zap.Error(err))
-				return err
+			if ddOp.Type != "" && ddOp.Body != "" {
+				sqlStr2 := "insert into dd_msg_send(operation_type, operation_body, is_sent) values (?,?,?)"
+				isDDMsgSent := false
+				_, err = tx.Exec(sqlStr2, ddOp.Type, ddOp.Body, isDDMsgSent)
+				if err != nil {
+					log.Error("insert dd_msg_send failed", zap.Error(err))
+					return err
+				}
 			}
 		}
 
@@ -373,13 +380,15 @@ func (tc *TableCatalog) DropPartition(ctx context.Context, collection *model.Col
 
 		// sql 2
 		if ddOpStr, ok := collection.Extra[metastore.DDOperationPrefix]; ok {
-			sqlStr2 := "insert into dd_msg_send(operation_type, operation_body, is_sent) values (?,?,?)"
 			var ddOp = ddOpStr.(model.DdOperation)
-			isDDMsgSent := false
-			_, err = tx.Exec(sqlStr2, ddOp.Type, ddOp.Body, isDDMsgSent)
-			if err != nil {
-				log.Error("insert dd_msg_send failed", zap.Error(err))
-				return err
+			if ddOp.Type != "" && ddOp.Body != "" {
+				sqlStr2 := "insert into dd_msg_send(operation_type, operation_body, is_sent) values (?,?,?)"
+				isDDMsgSent := false
+				_, err = tx.Exec(sqlStr2, ddOp.Type, ddOp.Body, isDDMsgSent)
+				if err != nil {
+					log.Error("insert dd_msg_send failed", zap.Error(err))
+					return err
+				}
 			}
 		}
 
@@ -659,7 +668,7 @@ func (tc *TableCatalog) ListCredentials(ctx context.Context) ([]string, error) {
 
 func (tc *TableCatalog) IsDDMsgSent(ctx context.Context) (bool, error) {
 	ddOp, err := tc.LoadDdOperation(ctx)
-	if err != nil {
+	if ddOp == (model.DdOperation{}) || err != nil {
 		return true, err
 	}
 	return ddOp.IsSent, nil
@@ -667,9 +676,9 @@ func (tc *TableCatalog) IsDDMsgSent(ctx context.Context) (bool, error) {
 
 func (tc *TableCatalog) LoadDdOperation(ctx context.Context) (model.DdOperation, error) {
 	var ddOp DdOperation
-	sql := "select * from dd_msg_send order by updated_at desc limit 1"
-	err := tc.DB.Get(&ddOp, sql)
-	if err != nil {
+	sqlStr := "select * from dd_msg_send order by updated_at desc limit 1"
+	err := tc.DB.Get(&ddOp, sqlStr)
+	if err != sql.ErrNoRows { // err.Error() != "sql: no rows in result set"
 		log.Error("get dd-operation failed", zap.Error(err))
 		return model.DdOperation{}, err
 	}
