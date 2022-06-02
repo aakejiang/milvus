@@ -243,7 +243,7 @@ func (tc *TableCatalog) DropCollection(ctx context.Context, collectionInfo *mode
 			log.Error("get RowsAffected failed", zap.Error(err))
 			return err
 		}
-		log.Debug("table collections RowsAffected:", zap.Any("rows", n))
+		log.Debug("table collections RowsAffected", zap.Any("rows", n))
 
 		// sql 2
 		sqlStr2 := "update partitions set is_deleted=true where collection_id=? and ts=?"
@@ -257,7 +257,7 @@ func (tc *TableCatalog) DropCollection(ctx context.Context, collectionInfo *mode
 			log.Error("get RowsAffected failed", zap.Error(err))
 			return err
 		}
-		log.Debug("table partitions RowsAffected:", zap.Any("rows", n))
+		log.Debug("table partitions RowsAffected", zap.Any("rows", n))
 
 		// sql 3
 		sqlStr3 := "update field_schemas set is_deleted=true where collection_id=? and ts=?"
@@ -271,7 +271,7 @@ func (tc *TableCatalog) DropCollection(ctx context.Context, collectionInfo *mode
 			log.Error("get RowsAffected failed", zap.Error(err))
 			return err
 		}
-		log.Debug("table field_schemas RowsAffected:", zap.Any("rows", n))
+		log.Debug("table field_schemas RowsAffected", zap.Any("rows", n))
 
 		// sql 4
 		sqlStr4 := "update indexes set is_deleted=true where collection_id=?"
@@ -285,7 +285,7 @@ func (tc *TableCatalog) DropCollection(ctx context.Context, collectionInfo *mode
 			log.Error("get RowsAffected failed", zap.Error(err))
 			return err
 		}
-		log.Debug("table indexes RowsAffected:", zap.Any("rows", n))
+		log.Debug("table indexes RowsAffected", zap.Any("rows", n))
 
 		// sql 5
 		sqlStr5 := "update segment_indexes set is_deleted=true where collection_id=?"
@@ -299,7 +299,7 @@ func (tc *TableCatalog) DropCollection(ctx context.Context, collectionInfo *mode
 			log.Error("get RowsAffected failed", zap.Error(err))
 			return err
 		}
-		log.Debug("table segment_indexes RowsAffected:", zap.Any("rows", n))
+		log.Debug("table segment_indexes RowsAffected", zap.Any("rows", n))
 
 		// sql 6
 		if ddOpStr, ok := collectionInfo.Extra[metastore.DDOperationPrefix]; ok {
@@ -316,7 +316,7 @@ func (tc *TableCatalog) DropCollection(ctx context.Context, collectionInfo *mode
 				log.Error("get RowsAffected failed", zap.Error(err))
 				return err
 			}
-			log.Debug("table dd_msg_send RowsAffected:", zap.Any("rows", n))
+			log.Debug("table dd_msg_send RowsAffected", zap.Any("rows", n))
 		}
 
 		return err
@@ -369,7 +369,7 @@ func (tc *TableCatalog) DropPartition(ctx context.Context, collection *model.Col
 			log.Error("get RowsAffected failed", zap.Error(err))
 			return err
 		}
-		log.Debug("table partitions RowsAffected:", zap.Any("rows", n))
+		log.Debug("table partitions RowsAffected", zap.Any("rows", n))
 
 		// sql 2
 		if ddOpStr, ok := collection.Extra[metastore.DDOperationPrefix]; ok {
@@ -460,7 +460,7 @@ func (tc *TableCatalog) DropIndex(ctx context.Context, collectionInfo *model.Col
 			log.Error("get RowsAffected failed", zap.Error(err))
 			return err
 		}
-		log.Debug("table indexes RowsAffected:", zap.Any("rows", n))
+		log.Debug("table indexes RowsAffected", zap.Any("rows", n))
 
 		// sql 2
 		sqlStr2 := "update segment_indexes set is_deleted=true where index_id=?"
@@ -474,7 +474,7 @@ func (tc *TableCatalog) DropIndex(ctx context.Context, collectionInfo *model.Col
 			log.Error("get RowsAffected failed", zap.Error(err))
 			return err
 		}
-		log.Debug("table segment_indexes RowsAffected:", zap.Any("rows", n))
+		log.Debug("table segment_indexes RowsAffected", zap.Any("rows", n))
 
 		return nil
 	})
@@ -532,7 +532,7 @@ func (tc *TableCatalog) AddAlias(ctx context.Context, collection *model.Collecti
 		log.Error("get RowsAffected failed", zap.Error(err))
 		return err
 	}
-	log.Debug("table collections RowsAffected:", zap.Any("rows", n))
+	log.Debug("table collections RowsAffected", zap.Any("rows", n))
 
 	return nil
 }
@@ -567,7 +567,7 @@ func (tc *TableCatalog) DropAlias(ctx context.Context, collectionID typeutil.Uni
 		log.Error("get RowsAffected failed", zap.Error(err))
 		return err
 	}
-	log.Debug("table collections RowsAffected:", zap.Any("rows", n))
+	log.Debug("table collections RowsAffected", zap.Any("rows", n))
 
 	return nil
 }
@@ -642,7 +642,7 @@ func (tc *TableCatalog) DropCredential(ctx context.Context, username string) err
 		log.Error("get RowsAffected failed", zap.Error(err))
 		return err
 	}
-	log.Debug("table credential_users RowsAffected:", zap.Any("rows", n))
+	log.Debug("table credential_users RowsAffected", zap.Any("rows", n))
 	return nil
 }
 

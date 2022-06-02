@@ -196,7 +196,7 @@ func (t *CreateCollectionReqTask) Execute(ctx context.Context) error {
         Name:                 schema.Name,
         Description:          schema.Description,
         AutoID:               schema.AutoID,
-        Fields:               model.BatchConvertFieldPBToModel(schema.Fields),
+        Fields:               kv.BatchConvertFieldPBToModel(schema.Fields),
         VirtualChannelNames:  vchanNames,
         PhysicalChannelNames: chanNames,
         ShardsNum:            t.Req.ShardsNum,

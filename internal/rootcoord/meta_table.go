@@ -295,7 +295,7 @@ func (mt *MetaTable) GetCollectionByID(collectionID typeutil.UniqueID, ts typeut
 		if !ok {
 			return nil, fmt.Errorf("can't find collection id : %d", collectionID)
 		}
-		return kvmetestore.CloneCollectionModel(col), nil
+		return model.CloneCollectionModel(col), nil
 	}
 
 	return mt.catalog.GetCollectionByID(mt.ctx, collectionID, ts)
@@ -318,7 +318,7 @@ func (mt *MetaTable) GetCollectionByName(collectionName string, ts typeutil.Time
 			return nil, fmt.Errorf("can't find collection %s with id %d", collectionName, vid)
 		}
 
-		return kvmetestore.CloneCollectionModel(col), nil
+		return model.CloneCollectionModel(col), nil
 	}
 
 	return mt.catalog.GetCollectionByName(mt.ctx, collectionName, ts)
@@ -333,7 +333,7 @@ func (mt *MetaTable) ListCollections(ts typeutil.Timestamp) (map[string]*model.C
 	if ts == 0 {
 		for collName, collID := range mt.collName2ID {
 			col := mt.collID2Meta[collID]
-			cols[collName] = kvmetestore.CloneCollectionModel(col)
+			cols[collName] = model.CloneCollectionModel(col)
 		}
 		return cols, nil
 	}

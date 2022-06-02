@@ -710,14 +710,13 @@ func TestCreateIndex(t *testing.T) {
 		IndexName: indexName,
 	}
 
-	var segmentIndexes []model.SegmentIndex
-	segmentIndex := model.SegmentIndex{
+	segmentIndexes := make(map[int64]model.SegmentIndex)
+	segmentIndexes[segID] = model.SegmentIndex{
 		Segment: model.Segment{
 			SegmentID: segID,
 		},
 		EnableIndex: false,
 	}
-	segmentIndexes = append(segmentIndexes, segmentIndex)
 	index.SegmentIndexes = segmentIndexes
 
 	// now we execute our method

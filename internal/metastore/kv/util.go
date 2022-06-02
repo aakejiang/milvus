@@ -80,25 +80,8 @@ func ConvertCollectionPBToModel(coll *pb.CollectionInfo, extra map[string]interf
 		ShardsNum:            coll.ShardsNum,
 		ConsistencyLevel:     coll.ConsistencyLevel,
 		CreateTime:           coll.CreateTime,
+		StartPositions:       coll.StartPositions,
 		Extra:                extra,
-	}
-}
-
-func CloneCollectionModel(coll model.Collection) *model.Collection {
-	return &model.Collection{
-		CollectionID:         coll.CollectionID,
-		Name:                 coll.Name,
-		Description:          coll.Description,
-		AutoID:               coll.AutoID,
-		Fields:               coll.Fields,
-		Partitions:           coll.Partitions,
-		FieldIndexes:         coll.FieldIndexes,
-		VirtualChannelNames:  coll.VirtualChannelNames,
-		PhysicalChannelNames: coll.PhysicalChannelNames,
-		ShardsNum:            coll.ShardsNum,
-		ConsistencyLevel:     coll.ConsistencyLevel,
-		CreateTime:           coll.CreateTime,
-		Extra:                coll.Extra,
 	}
 }
 
@@ -143,6 +126,7 @@ func ConvertToCollectionPB(coll *model.Collection) *pb.CollectionInfo {
 		PartitionIDs:               partitionIDs,
 		PartitionNames:             partitionNames,
 		FieldIndexes:               fieldIndexes,
+		CreateTime:                 coll.CreateTime,
 		VirtualChannelNames:        coll.VirtualChannelNames,
 		PhysicalChannelNames:       coll.PhysicalChannelNames,
 		ShardsNum:                  coll.ShardsNum,
@@ -164,31 +148,11 @@ func ConvertToSegmentIndexPB(index *model.Index) *pb.SegmentIndexInfo {
 	}
 }
 
-func MergeIndexModel(a *model.Index, b *model.Index) *model.Index {
-	if a.IndexName == "" {
-		a.IndexName = b.IndexName
-	}
-
-	if a.IndexParams == nil {
-		a.IndexParams = b.IndexParams
-	}
-
-	if a.SegmentIndexes == nil {
-		a.SegmentIndexes = b.SegmentIndexes
-	}
-
-	if a.Extra == nil {
-		a.Extra = b.Extra
-	}
-
-	return a
-}
-
 func ConvertSegmentIndexPBToModel(segIndex *pb.SegmentIndexInfo) *model.Index {
 	return &model.Index{
 		CollectionID: segIndex.CollectionID,
-		SegmentIndexes: []model.SegmentIndex{
-			{
+		SegmentIndexes: map[int64]model.SegmentIndex{
+			segIndex.SegmentID: {
 				Segment: model.Segment{
 					SegmentID:   segIndex.SegmentID,
 					PartitionID: segIndex.PartitionID,

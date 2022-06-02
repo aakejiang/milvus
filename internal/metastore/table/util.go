@@ -60,7 +60,7 @@ func ConvertCollectionDBToModel(coll *Collection, partition *Partition, field *F
 		ShardsNum:            properties.ShardsNum,
 		StartPositions:       properties.StartPositions,
 		ConsistencyLevel:     properties.ConsistencyLevel,
-		CreateTime:           uint64(coll.CreatedAt.Unix()),
+		CreateTime:           coll.Ts,
 		Aliases:              aliases,
 	}
 }
@@ -157,14 +157,6 @@ func ConvertSegmentIndexDBToModel(segmentIndex *SegmentIndex) *model.SegmentInde
 		Segment: model.Segment{
 			SegmentID:   segmentIndex.SegmentID,
 			PartitionID: segmentIndex.PartitionID,
-			//NumRows:             segmentIndex.,
-			//MemSize:             segmentIndex.,
-			//DmChannel:           segmentIndex.,
-			//CompactionFrom:      segmentIndex.,
-			//CreatedByCompaction: segmentIndex.,
-			//SegmentState:        segmentIndex.,
-			//ReplicaIds:          segmentIndex.,
-			//NodeIds:             segmentIndex.,
 		},
 		EnableIndex:    segmentIndex.EnableIndex,
 		BuildID:        segmentIndex.BuildID,
@@ -181,12 +173,14 @@ func ConvertToIndexModel(index *Index, segmentIndex *SegmentIndex) *model.Index 
 	}
 	segIndex := ConvertSegmentIndexDBToModel(segmentIndex)
 	return &model.Index{
-		CollectionID:   index.CollectionID,
-		FieldID:        index.FieldID,
-		IndexID:        index.IndexID,
-		IndexName:      index.IndexName,
-		IndexParams:    indexParams,
-		SegmentIndexes: []model.SegmentIndex{*segIndex},
+		CollectionID: index.CollectionID,
+		FieldID:      index.FieldID,
+		IndexID:      index.IndexID,
+		IndexName:    index.IndexName,
+		IndexParams:  indexParams,
+		SegmentIndexes: map[int64]model.SegmentIndex{
+			segIndex.SegmentID: *segIndex,
+		},
 	}
 }
 

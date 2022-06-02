@@ -500,7 +500,7 @@ func (kc *Catalog) ListIndexes(ctx context.Context) ([]*model.Index, error) {
 	for indexID, index := range indexMeta {
 		segmentIndex, ok := segmentIndexMeta[indexID]
 		if ok {
-			index = MergeIndexModel(index, segmentIndex)
+			index = model.MergeIndexModel(index, segmentIndex)
 			delete(segmentIndexMeta, indexID)
 		}
 		indexes = append(indexes, index)
