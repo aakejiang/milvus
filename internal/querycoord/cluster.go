@@ -55,10 +55,7 @@ type Cluster interface {
 	watchDmChannels(ctx context.Context, nodeID int64, in *querypb.WatchDmChannelsRequest) error
 	watchDeltaChannels(ctx context.Context, nodeID int64, in *querypb.WatchDeltaChannelsRequest) error
 
-	hasWatchedQueryChannel(ctx context.Context, nodeID int64, collectionID UniqueID) bool
 	hasWatchedDeltaChannel(ctx context.Context, nodeID int64, collectionID UniqueID) bool
-	addQueryChannel(ctx context.Context, nodeID int64, in *querypb.AddQueryChannelRequest) error
-	removeQueryChannel(ctx context.Context, nodeID int64, in *querypb.RemoveQueryChannelRequest) error
 	releaseCollection(ctx context.Context, nodeID int64, in *querypb.ReleaseCollectionRequest) error
 	releasePartitions(ctx context.Context, nodeID int64, in *querypb.ReleasePartitionsRequest) error
 	getSegmentInfo(ctx context.Context, in *querypb.GetSegmentInfoRequest) ([]*querypb.SegmentInfo, error)
@@ -224,10 +221,10 @@ func (c *queryNodeCluster) loadSegments(ctx context.Context, nodeID int64, in *q
 	return fmt.Errorf("loadSegments: can't find QueryNode by nodeID, nodeID = %d", nodeID)
 }
 
-func (c *queryNodeCluster) releaseSegments(ctx context.Context, nodeID int64, in *querypb.ReleaseSegmentsRequest) error {
+func (c *queryNodeCluster) releaseSegments(ctx context.Context, leaderID int64, in *querypb.ReleaseSegmentsRequest) error {
 	c.RLock()
 	var targetNode Node
-	if node, ok := c.nodes[nodeID]; ok {
+	if node, ok := c.nodes[leaderID]; ok {
 		targetNode = node
 	}
 	c.RUnlock()
@@ -239,14 +236,14 @@ func (c *queryNodeCluster) releaseSegments(ctx context.Context, nodeID int64, in
 
 		err := targetNode.releaseSegments(ctx, in)
 		if err != nil {
-			log.Warn("releaseSegments: queryNode release segments error", zap.Int64("nodeID", nodeID), zap.String("error info", err.Error()))
+			log.Warn("releaseSegments: queryNode release segments error", zap.Int64("leaderID", leaderID), zap.Int64("nodeID", in.NodeID), zap.String("error info", err.Error()))
 			return err
 		}
 
 		return nil
 	}
 
-	return fmt.Errorf("releaseSegments: can't find QueryNode by nodeID, nodeID = %d", nodeID)
+	return fmt.Errorf("releaseSegments: can't find QueryNode by nodeID, nodeID = %d", leaderID)
 }
 
 func (c *queryNodeCluster) watchDmChannels(ctx context.Context, nodeID int64, in *querypb.WatchDmChannelsRequest) error {
@@ -309,64 +306,6 @@ func (c *queryNodeCluster) hasWatchedDeltaChannel(ctx context.Context, nodeID in
 	defer c.RUnlock()
 
 	return c.nodes[nodeID].hasWatchedDeltaChannel(collectionID)
-}
-
-func (c *queryNodeCluster) hasWatchedQueryChannel(ctx context.Context, nodeID int64, collectionID UniqueID) bool {
-	c.RLock()
-	defer c.RUnlock()
-
-	return c.nodes[nodeID].hasWatchedQueryChannel(collectionID)
-}
-
-func (c *queryNodeCluster) addQueryChannel(ctx context.Context, nodeID int64, in *querypb.AddQueryChannelRequest) error {
-	c.RLock()
-	var targetNode Node
-	if node, ok := c.nodes[nodeID]; ok {
-		targetNode = node
-	}
-	c.RUnlock()
-
-	if targetNode != nil {
-		emptyChangeInfo := &querypb.SealedSegmentsChangeInfo{
-			Base: &commonpb.MsgBase{
-				MsgType: commonpb.MsgType_SealedSegmentsChangeInfo,
-			},
-		}
-		msgPosition, err := c.clusterMeta.sendSealedSegmentChangeInfos(in.CollectionID, in.QueryChannel, emptyChangeInfo)
-		if err != nil {
-			return err
-		}
-
-		// update watch position to latest
-		in.SeekPosition = msgPosition
-		err = targetNode.addQueryChannel(ctx, in)
-		if err != nil {
-			return err
-		}
-		return nil
-	}
-
-	return fmt.Errorf("addQueryChannel: can't find QueryNode by nodeID, nodeID = %d", nodeID)
-}
-func (c *queryNodeCluster) removeQueryChannel(ctx context.Context, nodeID int64, in *querypb.RemoveQueryChannelRequest) error {
-	c.RLock()
-	var targetNode Node
-	if node, ok := c.nodes[nodeID]; ok {
-		targetNode = node
-	}
-	c.RUnlock()
-
-	if targetNode != nil {
-		err := targetNode.removeQueryChannel(ctx, in)
-		if err != nil {
-			log.Warn("removeQueryChannel: queryNode remove query channel error", zap.String("error", err.Error()))
-			return err
-		}
-
-		return nil
-	}
-
-	return fmt.Errorf("removeQueryChannel: can't find QueryNode by nodeID, nodeID = %d", nodeID)
 }
 
 func (c *queryNodeCluster) releaseCollection(ctx context.Context, nodeID int64, in *querypb.ReleaseCollectionRequest) error {
@@ -443,18 +382,40 @@ func (c *queryNodeCluster) getSegmentInfoByID(ctx context.Context, segmentID Uni
 }
 
 func (c *queryNodeCluster) getSegmentInfo(ctx context.Context, in *querypb.GetSegmentInfoRequest) ([]*querypb.SegmentInfo, error) {
-
 	type respTuple struct {
 		res *querypb.GetSegmentInfoResponse
 		err error
 	}
 
+	var (
+		segmentInfos []*querypb.SegmentInfo
+	)
+
+	// Fetch sealed segments from Meta
+	if len(in.SegmentIDs) > 0 {
+		for _, segmentID := range in.SegmentIDs {
+			segment, err := c.clusterMeta.getSegmentInfoByID(segmentID)
+			if err != nil {
+				return nil, err
+			}
+
+			segmentInfos = append(segmentInfos, segment)
+		}
+	} else {
+		allSegments := c.clusterMeta.showSegmentInfos(in.CollectionID, nil)
+		for _, segment := range allSegments {
+			if in.CollectionID == 0 || segment.CollectionID == in.CollectionID {
+				segmentInfos = append(segmentInfos, segment)
+			}
+		}
+	}
+
+	// Fetch growing segments
 	c.RLock()
 	var wg sync.WaitGroup
 	cnt := len(c.nodes)
 	resChan := make(chan respTuple, cnt)
 	wg.Add(cnt)
-
 	for _, node := range c.nodes {
 		go func(node Node) {
 			defer wg.Done()
@@ -468,13 +429,18 @@ func (c *queryNodeCluster) getSegmentInfo(ctx context.Context, in *querypb.GetSe
 	c.RUnlock()
 	wg.Wait()
 	close(resChan)
-	var segmentInfos []*querypb.SegmentInfo
 
 	for tuple := range resChan {
 		if tuple.err != nil {
 			return nil, tuple.err
 		}
-		segmentInfos = append(segmentInfos, tuple.res.GetInfos()...)
+
+		segments := tuple.res.GetInfos()
+		for _, segment := range segments {
+			if segment.SegmentState != commonpb.SegmentState_Sealed {
+				segmentInfos = append(segmentInfos, segment)
+			}
+		}
 	}
 
 	//TODO::update meta
@@ -697,10 +663,6 @@ func (c *queryNodeCluster) isOnline(nodeID int64) (bool, error) {
 //				log.Debug("PrintMeta: query coordinator cluster info: collectionInfo", zap.Int64("nodeID", id), zap.Int64("collectionID", info.CollectionID), zap.Any("info", info))
 //			}
 //
-//			queryChannelInfos := node.showWatchedQueryChannels()
-//			for _, info := range queryChannelInfos {
-//				log.Debug("PrintMeta: query coordinator cluster info: watchedQueryChannelInfo", zap.Int64("nodeID", id), zap.Int64("collectionID", info.CollectionID), zap.Any("info", info))
-//			}
 //		}
 //	}
 //}

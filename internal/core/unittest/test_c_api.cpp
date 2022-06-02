@@ -66,22 +66,6 @@ get_default_schema_config() {
     return conf.c_str();
 }
 
-std::vector<char>
-translate_text_plan_to_binary_plan(const char* text_plan) {
-    proto::plan::PlanNode plan_node;
-    auto ok = google::protobuf::TextFormat::ParseFromString(text_plan, &plan_node);
-    AssertInfo(ok, "Failed to parse");
-
-    std::string binary_plan;
-    plan_node.SerializeToString(&binary_plan);
-
-    std::vector<char> ret;
-    ret.resize(binary_plan.size());
-    std::memcpy(ret.data(), binary_plan.c_str(), binary_plan.size());
-
-    return ret;
-}
-
 auto
 generate_data(int N) {
     std::vector<char> raw_data;
@@ -569,6 +553,154 @@ TEST(CApiTest, DeleteRepeatedPksFromSealedSegment) {
     suc = query_result->ParseFromArray(retrieve_result.proto_blob, retrieve_result.proto_size);
     ASSERT_TRUE(suc);
     ASSERT_EQ(query_result->ids().int_id().data().size(), 0);
+
+    DeleteRetrievePlan(plan.release());
+    DeleteRetrieveResult(&retrieve_result);
+
+    DeleteCollection(collection);
+    DeleteSegment(segment);
+}
+
+TEST(CApiTest, InsertSamePkAfterDeleteOnGrowingSegment) {
+    auto collection = NewCollection(get_default_schema_config());
+    auto segment = NewSegment(collection, Growing, -1);
+    auto col = (milvus::segcore::Collection*)collection;
+
+    int N = 10;
+    auto dataset = DataGen(col->get_schema(), N);
+    auto insert_data = serialize(dataset.raw_);
+
+    // first insert data
+    // insert data with pks = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9} , timestamps = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9}
+    int64_t offset;
+    PreInsert(segment, N, &offset);
+    auto res = Insert(segment, offset, N, dataset.row_ids_.data(), dataset.timestamps_.data(), insert_data.data(),
+                      insert_data.size());
+    assert(res.error_code == Success);
+
+    // delete data pks = {1, 2, 3}, timestamps = {9, 9, 9}
+    std::vector<int64_t> delete_row_ids = {1, 2, 3};
+    auto ids = std::make_unique<IdArray>();
+    ids->mutable_int_id()->mutable_data()->Add(delete_row_ids.begin(), delete_row_ids.end());
+    auto delete_data = serialize(ids.get());
+    std::vector<uint64_t> delete_timestamps(3, dataset.timestamps_[N - 1]);
+
+    offset = PreDelete(segment, 3);
+
+    auto del_res = Delete(segment, offset, 3, delete_data.data(), delete_data.size(), delete_timestamps.data());
+    assert(del_res.error_code == Success);
+
+    // create retrieve plan pks in {1, 2, 3}, timestamp = 9
+    std::vector<int64_t> retrive_row_ids = {1, 2, 3};
+    auto schema = ((milvus::segcore::Collection*)collection)->get_schema();
+    auto plan = std::make_unique<query::RetrievePlan>(*schema);
+    auto term_expr = std::make_unique<query::TermExprImpl<int64_t>>(FieldId(101), DataType::INT64, retrive_row_ids);
+    plan->plan_node_ = std::make_unique<query::RetrievePlanNode>();
+    plan->plan_node_->predicate_ = std::move(term_expr);
+    std::vector<FieldId> target_field_ids{FieldId(100), FieldId(101)};
+    plan->field_ids_ = target_field_ids;
+
+    CRetrieveResult retrieve_result;
+    res = Retrieve(segment, plan.get(), dataset.timestamps_[N - 1], &retrieve_result);
+    ASSERT_EQ(res.error_code, Success);
+    auto query_result = std::make_unique<proto::segcore::RetrieveResults>();
+    auto suc = query_result->ParseFromArray(retrieve_result.proto_blob, retrieve_result.proto_size);
+    ASSERT_TRUE(suc);
+    ASSERT_EQ(query_result->ids().int_id().data().size(), 0);
+
+    // second insert data
+    // insert data with pks = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9} , timestamps = {10, 11, 12, 13, 14, 15, 16, 17, 18, 19}
+    dataset = DataGen(col->get_schema(), N, 42, N);
+    insert_data = serialize(dataset.raw_);
+    PreInsert(segment, N, &offset);
+    res = Insert(segment, offset, N, dataset.row_ids_.data(), dataset.timestamps_.data(), insert_data.data(),
+                 insert_data.size());
+    assert(res.error_code == Success);
+
+    // retrieve pks in {1, 2, 3}, timestamp = 19
+    res = Retrieve(segment, plan.get(), dataset.timestamps_[N - 1], &retrieve_result);
+    ASSERT_EQ(res.error_code, Success);
+
+    query_result = std::make_unique<proto::segcore::RetrieveResults>();
+    suc = query_result->ParseFromArray(retrieve_result.proto_blob, retrieve_result.proto_size);
+    ASSERT_TRUE(suc);
+    ASSERT_EQ(query_result->ids().int_id().data().size(), 3);
+
+    DeleteRetrievePlan(plan.release());
+    DeleteRetrieveResult(&retrieve_result);
+
+    DeleteCollection(collection);
+    DeleteSegment(segment);
+}
+
+TEST(CApiTest, InsertSamePkAfterDeleteOnSealedSegment) {
+    auto collection = NewCollection(get_default_schema_config());
+    auto segment = NewSegment(collection, Sealed, -1);
+    auto col = (milvus::segcore::Collection*)collection;
+
+    int N = 10;
+    auto dataset = DataGen(col->get_schema(), N, 42, 0, 2);
+
+    // insert data with pks = {0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5} , timestamps = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9}
+    for (auto& [field_id, field_meta] : col->get_schema()->get_fields()) {
+        auto array = dataset.get_col(field_id);
+        auto data = serialize(array.get());
+
+        auto load_info = CLoadFieldDataInfo{field_id.get(), data.data(), data.size(), N};
+
+        auto res = LoadFieldData(segment, load_info);
+        assert(res.error_code == Success);
+        auto count = GetRowCount(segment);
+        assert(count == N);
+    }
+
+    FieldMeta ts_field_meta(FieldName("Timestamp"), TimestampFieldID, DataType::INT64);
+    auto ts_array = CreateScalarDataArrayFrom(dataset.timestamps_.data(), N, ts_field_meta);
+    auto ts_data = serialize(ts_array.get());
+    auto load_info = CLoadFieldDataInfo{TimestampFieldID.get(), ts_data.data(), ts_data.size(), N};
+    auto res = LoadFieldData(segment, load_info);
+    assert(res.error_code == Success);
+    auto count = GetRowCount(segment);
+    assert(count == N);
+
+    FieldMeta row_id_field_meta(FieldName("RowID"), RowFieldID, DataType::INT64);
+    auto row_id_array = CreateScalarDataArrayFrom(dataset.row_ids_.data(), N, row_id_field_meta);
+    auto row_id_data = serialize(row_id_array.get());
+    load_info = CLoadFieldDataInfo{RowFieldID.get(), row_id_data.data(), row_id_data.size(), N};
+    res = LoadFieldData(segment, load_info);
+    assert(res.error_code == Success);
+    count = GetRowCount(segment);
+    assert(count == N);
+
+    // delete data pks = {1, 2, 3}, timestamps = {4, 4, 4}
+    std::vector<int64_t> delete_row_ids = {1, 2, 3};
+    auto ids = std::make_unique<IdArray>();
+    ids->mutable_int_id()->mutable_data()->Add(delete_row_ids.begin(), delete_row_ids.end());
+    auto delete_data = serialize(ids.get());
+    std::vector<uint64_t> delete_timestamps(3, dataset.timestamps_[4]);
+
+    auto offset = PreDelete(segment, 3);
+
+    auto del_res = Delete(segment, offset, 3, delete_data.data(), delete_data.size(), delete_timestamps.data());
+    assert(del_res.error_code == Success);
+
+    // create retrieve plan pks in {1, 2, 3}, timestamp = 9
+    std::vector<int64_t> retrive_row_ids = {1, 2, 3};
+    auto schema = ((milvus::segcore::Collection*)collection)->get_schema();
+    auto plan = std::make_unique<query::RetrievePlan>(*schema);
+    auto term_expr = std::make_unique<query::TermExprImpl<int64_t>>(FieldId(101), DataType::INT64, retrive_row_ids);
+    plan->plan_node_ = std::make_unique<query::RetrievePlanNode>();
+    plan->plan_node_->predicate_ = std::move(term_expr);
+    std::vector<FieldId> target_field_ids{FieldId(100), FieldId(101)};
+    plan->field_ids_ = target_field_ids;
+
+    CRetrieveResult retrieve_result;
+    res = Retrieve(segment, plan.get(), dataset.timestamps_[N - 1], &retrieve_result);
+    ASSERT_EQ(res.error_code, Success);
+    auto query_result = std::make_unique<proto::segcore::RetrieveResults>();
+    auto suc = query_result->ParseFromArray(retrieve_result.proto_blob, retrieve_result.proto_size);
+    ASSERT_TRUE(suc);
+    ASSERT_EQ(query_result->ids().int_id().data().size(), 3);
 
     DeleteRetrievePlan(plan.release());
     DeleteRetrieveResult(&retrieve_result);
@@ -1269,7 +1401,11 @@ TEST(CApiTest, Indexing_Without_Predicate) {
     AppendFieldInfo(c_load_index_info, 100, CDataType::FloatVector);
     AppendIndex(c_load_index_info, (CBinarySet)&binary_set);
 
-    auto sealed_segment = SealedCreator(schema, dataset, *(LoadIndexInfo*)c_load_index_info);
+    // load index for vec field, load raw data for scalar filed
+    auto sealed_segment = SealedCreator(schema, dataset);
+    sealed_segment->DropFieldData(FieldId(100));
+    sealed_segment->LoadIndex(*(LoadIndexInfo*)c_load_index_info);
+
     CSearchResult c_search_result_on_bigIndex;
     auto res_after_load_index =
         Search(sealed_segment.get(), plan, placeholderGroup, time, &c_search_result_on_bigIndex, -1);
@@ -1390,7 +1526,11 @@ TEST(CApiTest, Indexing_Expr_Without_Predicate) {
     AppendFieldInfo(c_load_index_info, 100, CDataType::FloatVector);
     AppendIndex(c_load_index_info, (CBinarySet)&binary_set);
 
-    auto sealed_segment = SealedCreator(schema, dataset, *(LoadIndexInfo*)c_load_index_info);
+    // load index for vec field, load raw data for scalar filed
+    auto sealed_segment = SealedCreator(schema, dataset);
+    sealed_segment->DropFieldData(FieldId(100));
+    sealed_segment->LoadIndex(*(LoadIndexInfo*)c_load_index_info);
+
     CSearchResult c_search_result_on_bigIndex;
     auto res_after_load_index =
         Search(sealed_segment.get(), plan, placeholderGroup, time, &c_search_result_on_bigIndex, -1);
@@ -1529,7 +1669,11 @@ TEST(CApiTest, Indexing_With_float_Predicate_Range) {
     AppendFieldInfo(c_load_index_info, 100, CDataType::FloatVector);
     AppendIndex(c_load_index_info, (CBinarySet)&binary_set);
 
-    auto sealed_segment = SealedCreator(schema, dataset, *(LoadIndexInfo*)c_load_index_info);
+    // load index for vec field, load raw data for scalar filed
+    auto sealed_segment = SealedCreator(schema, dataset);
+    sealed_segment->DropFieldData(FieldId(100));
+    sealed_segment->LoadIndex(*(LoadIndexInfo*)c_load_index_info);
+
     CSearchResult c_search_result_on_bigIndex;
     auto res_after_load_index =
         Search(sealed_segment.get(), plan, placeholderGroup, time, &c_search_result_on_bigIndex, -1);
@@ -1682,7 +1826,11 @@ TEST(CApiTest, Indexing_Expr_With_float_Predicate_Range) {
     AppendFieldInfo(c_load_index_info, 100, CDataType::FloatVector);
     AppendIndex(c_load_index_info, (CBinarySet)&binary_set);
 
-    auto sealed_segment = SealedCreator(schema, dataset, *(LoadIndexInfo*)c_load_index_info);
+    // load index for vec field, load raw data for scalar filed
+    auto sealed_segment = SealedCreator(schema, dataset);
+    sealed_segment->DropFieldData(FieldId(100));
+    sealed_segment->LoadIndex(*(LoadIndexInfo*)c_load_index_info);
+
     CSearchResult c_search_result_on_bigIndex;
     auto res_after_load_index =
         Search(sealed_segment.get(), plan, placeholderGroup, time, &c_search_result_on_bigIndex, -1);
@@ -1819,7 +1967,11 @@ TEST(CApiTest, Indexing_With_float_Predicate_Term) {
     AppendFieldInfo(c_load_index_info, 100, CDataType::FloatVector);
     AppendIndex(c_load_index_info, (CBinarySet)&binary_set);
 
-    auto sealed_segment = SealedCreator(schema, dataset, *(LoadIndexInfo*)c_load_index_info);
+    // load index for vec field, load raw data for scalar filed
+    auto sealed_segment = SealedCreator(schema, dataset);
+    sealed_segment->DropFieldData(FieldId(100));
+    sealed_segment->LoadIndex(*(LoadIndexInfo*)c_load_index_info);
+
     CSearchResult c_search_result_on_bigIndex;
     auto res_after_load_index =
         Search(sealed_segment.get(), plan, placeholderGroup, time, &c_search_result_on_bigIndex, -1);
@@ -1965,7 +2117,11 @@ TEST(CApiTest, Indexing_Expr_With_float_Predicate_Term) {
     AppendFieldInfo(c_load_index_info, 100, CDataType::FloatVector);
     AppendIndex(c_load_index_info, (CBinarySet)&binary_set);
 
-    auto sealed_segment = SealedCreator(schema, dataset, *(LoadIndexInfo*)c_load_index_info);
+    // load index for vec field, load raw data for scalar filed
+    auto sealed_segment = SealedCreator(schema, dataset);
+    sealed_segment->DropFieldData(FieldId(100));
+    sealed_segment->LoadIndex(*(LoadIndexInfo*)c_load_index_info);
+
     CSearchResult c_search_result_on_bigIndex;
     auto res_after_load_index =
         Search(sealed_segment.get(), plan, placeholderGroup, time, &c_search_result_on_bigIndex, -1);
@@ -2104,7 +2260,11 @@ TEST(CApiTest, Indexing_With_binary_Predicate_Range) {
     AppendFieldInfo(c_load_index_info, 100, CDataType::BinaryVector);
     AppendIndex(c_load_index_info, (CBinarySet)&binary_set);
 
-    auto sealed_segment = SealedCreator(schema, dataset, *(LoadIndexInfo*)c_load_index_info);
+    // load index for vec field, load raw data for scalar filed
+    auto sealed_segment = SealedCreator(schema, dataset);
+    sealed_segment->DropFieldData(FieldId(100));
+    sealed_segment->LoadIndex(*(LoadIndexInfo*)c_load_index_info);
+
     CSearchResult c_search_result_on_bigIndex;
     auto res_after_load_index =
         Search(sealed_segment.get(), plan, placeholderGroup, time, &c_search_result_on_bigIndex, -1);
@@ -2256,7 +2416,11 @@ TEST(CApiTest, Indexing_Expr_With_binary_Predicate_Range) {
     AppendFieldInfo(c_load_index_info, 100, CDataType::BinaryVector);
     AppendIndex(c_load_index_info, (CBinarySet)&binary_set);
 
-    auto sealed_segment = SealedCreator(schema, dataset, *(LoadIndexInfo*)c_load_index_info);
+    // load index for vec field, load raw data for scalar filed
+    auto sealed_segment = SealedCreator(schema, dataset);
+    sealed_segment->DropFieldData(FieldId(100));
+    sealed_segment->LoadIndex(*(LoadIndexInfo*)c_load_index_info);
+
     CSearchResult c_search_result_on_bigIndex;
     auto res_after_load_index =
         Search(sealed_segment.get(), plan, placeholderGroup, time, &c_search_result_on_bigIndex, -1);
@@ -2395,7 +2559,11 @@ TEST(CApiTest, Indexing_With_binary_Predicate_Term) {
     AppendFieldInfo(c_load_index_info, 100, CDataType::BinaryVector);
     AppendIndex(c_load_index_info, (CBinarySet)&binary_set);
 
-    auto sealed_segment = SealedCreator(schema, dataset, *(LoadIndexInfo*)c_load_index_info);
+    // load index for vec field, load raw data for scalar filed
+    auto sealed_segment = SealedCreator(schema, dataset);
+    sealed_segment->DropFieldData(FieldId(100));
+    sealed_segment->LoadIndex(*(LoadIndexInfo*)c_load_index_info);
+
     CSearchResult c_search_result_on_bigIndex;
     auto res_after_load_index =
         Search(sealed_segment.get(), plan, placeholderGroup, time, &c_search_result_on_bigIndex, -1);
@@ -2556,7 +2724,11 @@ TEST(CApiTest, Indexing_Expr_With_binary_Predicate_Term) {
     AppendFieldInfo(c_load_index_info, 100, CDataType::BinaryVector);
     AppendIndex(c_load_index_info, (CBinarySet)&binary_set);
 
-    auto sealed_segment = SealedCreator(schema, dataset, *(LoadIndexInfo*)c_load_index_info);
+    // load index for vec field, load raw data for scalar filed
+    auto sealed_segment = SealedCreator(schema, dataset);
+    sealed_segment->DropFieldData(FieldId(100));
+    sealed_segment->LoadIndex(*(LoadIndexInfo*)c_load_index_info);
+
     CSearchResult c_search_result_on_bigIndex;
     auto res_after_load_index =
         Search(sealed_segment.get(), plan, placeholderGroup, time, &c_search_result_on_bigIndex, -1);
@@ -2764,7 +2936,11 @@ TEST(CApiTest, SealedSegment_search_float_Predicate_Range) {
     status = LoadFieldData(segment, c_ts_field_data);
     assert(status.error_code == Success);
 
-    auto sealed_segment = SealedCreator(schema, dataset, *(LoadIndexInfo*)c_load_index_info);
+    // load index for vec field, load raw data for scalar filed
+    auto sealed_segment = SealedCreator(schema, dataset);
+    sealed_segment->DropFieldData(FieldId(100));
+    sealed_segment->LoadIndex(*(LoadIndexInfo*)c_load_index_info);
+
     CSearchResult c_search_result_on_bigIndex;
     auto res_after_load_index =
         Search(sealed_segment.get(), plan, placeholderGroup, time, &c_search_result_on_bigIndex, -1);
@@ -2993,17 +3169,6 @@ TEST(CApiTest, SealedSegment_search_float_With_Expr_Predicate_Range) {
 
     auto indexing = generate_index(vec_col.data(), conf, DIM, TOPK, N, IndexEnum::INDEX_FAISS_IVFPQ);
 
-    // gen query dataset
-    auto query_dataset = knowhere::GenDataset(num_queries, DIM, query_ptr);
-    auto result_on_index = indexing->Query(query_dataset, conf, nullptr);
-    auto ids = result_on_index->Get<int64_t*>(knowhere::meta::IDS);
-    auto dis = result_on_index->Get<float*>(knowhere::meta::DISTANCE);
-    std::vector<int64_t> vec_ids(ids, ids + TOPK * num_queries);
-    std::vector<float> vec_dis;
-    for (int j = 0; j < TOPK * num_queries; ++j) {
-        vec_dis.push_back(dis[j] * -1);
-    }
-
     auto binary_set = indexing->Serialize(conf);
     void* c_load_index_info = nullptr;
     status = NewLoadIndexInfo(&c_load_index_info);
@@ -3021,13 +3186,17 @@ TEST(CApiTest, SealedSegment_search_float_With_Expr_Predicate_Range) {
     AppendFieldInfo(c_load_index_info, 100, CDataType::FloatVector);
     AppendIndex(c_load_index_info, (CBinarySet)&binary_set);
 
+    // load vec index
     auto load_index_info = (LoadIndexInfo*)c_load_index_info;
     auto query_dataset2 = knowhere::GenDataset(num_queries, DIM, query_ptr);
     auto index = std::dynamic_pointer_cast<knowhere::VecIndex>(load_index_info->index);
     auto result_on_index2 = index->Query(query_dataset2, conf, nullptr);
     auto ids2 = result_on_index2->Get<int64_t*>(knowhere::meta::IDS);
     auto dis2 = result_on_index2->Get<float*>(knowhere::meta::DISTANCE);
+    status = UpdateSealedSegmentIndex(segment, c_load_index_info);
+    assert(status.error_code == Success);
 
+    // load raw data
     auto c_counter_field_data = CLoadFieldDataInfo{
         101,
         counter_data.data(),
@@ -3055,24 +3224,16 @@ TEST(CApiTest, SealedSegment_search_float_With_Expr_Predicate_Range) {
     status = LoadFieldData(segment, c_ts_field_data);
     assert(status.error_code == Success);
 
-    status = UpdateSealedSegmentIndex(segment, c_load_index_info);
-    assert(status.error_code == Success);
-
-    auto counter_index = GenScalarIndexing(N, counter_col.data());
-    auto counter_index_binary_set = counter_index->Serialize(conf);
-    CLoadIndexInfo counter_index_info = nullptr;
-    status = NewLoadIndexInfo(&counter_index_info);
-    assert(status.error_code == Success);
-    status = AppendFieldInfo(counter_index_info, 101, CDataType::Int64);
-    assert(status.error_code == Success);
-    std::string counter_index_type_key = "index_type";
-    std::string counter_index_type_value = "sort";
-    status = AppendIndexParam(counter_index_info, counter_index_type_key.c_str(), counter_index_type_value.c_str());
-    assert(status.error_code == Success);
-    status = AppendIndex(counter_index_info, (CBinarySet)&counter_index_binary_set);
-    assert(status.error_code == Success);
-    status = UpdateSealedSegmentIndex(segment, counter_index_info);
-    assert(status.error_code == Success);
+    // gen query dataset
+    auto query_dataset = knowhere::GenDataset(num_queries, DIM, query_ptr);
+    auto result_on_index = indexing->Query(query_dataset, conf, nullptr);
+    auto ids = result_on_index->Get<int64_t*>(knowhere::meta::IDS);
+    auto dis = result_on_index->Get<float*>(knowhere::meta::DISTANCE);
+    std::vector<int64_t> vec_ids(ids, ids + TOPK * num_queries);
+    std::vector<float> vec_dis;
+    for (int j = 0; j < TOPK * num_queries; ++j) {
+        vec_dis.push_back(dis[j] * -1);
+    }
 
     CSearchResult c_search_result_on_bigIndex;
     auto res_after_load_index = Search(segment, plan, placeholderGroup, time, &c_search_result_on_bigIndex, -1);
@@ -3089,5 +3250,159 @@ TEST(CApiTest, SealedSegment_search_float_With_Expr_Predicate_Range) {
     DeletePlaceholderGroup(placeholderGroup);
     DeleteSearchResult(c_search_result_on_bigIndex);
     DeleteCollection(collection);
+    DeleteSegment(segment);
+}
+
+TEST(CApiTest, RetriveScalarFieldFromSealedSegmentWithIndex) {
+    auto schema = std::make_shared<Schema>();
+    auto i8_fid = schema->AddDebugField("age8", DataType::INT8);
+    auto i16_fid = schema->AddDebugField("age16", DataType::INT16);
+    auto i32_fid = schema->AddDebugField("age32", DataType::INT32);
+    auto i64_fid = schema->AddDebugField("age64", DataType::INT64);
+    auto float_fid = schema->AddDebugField("age_float", DataType::FLOAT);
+    auto double_fid = schema->AddDebugField("age_double", DataType::DOUBLE);
+    schema->set_primary_field_id(i64_fid);
+
+    auto segment = CreateSealedSegment(schema).release();
+
+    int N = ROW_COUNT;
+    auto raw_data = DataGen(schema, N);
+    LoadIndexInfo load_index_info;
+
+    // load timestamp field
+    FieldMeta ts_field_meta(FieldName("Timestamp"), TimestampFieldID, DataType::INT64);
+    auto ts_array = CreateScalarDataArrayFrom(raw_data.timestamps_.data(), N, ts_field_meta);
+    auto ts_data = serialize(ts_array.get());
+    auto load_info = CLoadFieldDataInfo{TimestampFieldID.get(), ts_data.data(), ts_data.size(), N};
+    auto res = LoadFieldData(segment, load_info);
+    assert(res.error_code == Success);
+    auto count = GetRowCount(segment);
+    assert(count == N);
+
+    // load rowid field
+    FieldMeta row_id_field_meta(FieldName("RowID"), RowFieldID, DataType::INT64);
+    auto row_id_array = CreateScalarDataArrayFrom(raw_data.row_ids_.data(), N, row_id_field_meta);
+    auto row_id_data = serialize(row_id_array.get());
+    load_info = CLoadFieldDataInfo{RowFieldID.get(), row_id_data.data(), row_id_data.size(), N};
+    res = LoadFieldData(segment, load_info);
+    assert(res.error_code == Success);
+    count = GetRowCount(segment);
+    assert(count == N);
+
+    // load index for int8 field
+    auto age8_col = raw_data.get_col<int8_t>(i8_fid);
+    GenScalarIndexing(N, age8_col.data());
+    auto age8_index = milvus::scalar::CreateScalarIndexSort<int8_t>();
+    age8_index->Build(N, age8_col.data());
+    load_index_info.field_id = i8_fid.get();
+    load_index_info.field_type = Int8;
+    load_index_info.index = std::shared_ptr<milvus::scalar::ScalarIndexSort<int8_t>>(age8_index.release());
+    segment->LoadIndex(load_index_info);
+
+    // load index for 16 field
+    auto age16_col = raw_data.get_col<int16_t>(i16_fid);
+    GenScalarIndexing(N, age16_col.data());
+    auto age16_index = milvus::scalar::CreateScalarIndexSort<int16_t>();
+    age16_index->Build(N, age16_col.data());
+    load_index_info.field_id = i16_fid.get();
+    load_index_info.field_type = Int16;
+    load_index_info.index = std::shared_ptr<milvus::scalar::ScalarIndexSort<int16_t>>(age16_index.release());
+    segment->LoadIndex(load_index_info);
+
+    // load index for int32 field
+    auto age32_col = raw_data.get_col<int32_t>(i32_fid);
+    GenScalarIndexing(N, age32_col.data());
+    auto age32_index = milvus::scalar::CreateScalarIndexSort<int32_t>();
+    age32_index->Build(N, age32_col.data());
+    load_index_info.field_id = i32_fid.get();
+    load_index_info.field_type = Int32;
+    load_index_info.index = std::shared_ptr<milvus::scalar::ScalarIndexSort<int32_t>>(age32_index.release());
+    segment->LoadIndex(load_index_info);
+
+    // load index for int64 field
+    auto age64_col = raw_data.get_col<int64_t>(i64_fid);
+    GenScalarIndexing(N, age64_col.data());
+    auto age64_index = milvus::scalar::CreateScalarIndexSort<int64_t>();
+    age64_index->Build(N, age64_col.data());
+    load_index_info.field_id = i64_fid.get();
+    load_index_info.field_type = Int64;
+    load_index_info.index = std::shared_ptr<milvus::scalar::ScalarIndexSort<int64_t>>(age64_index.release());
+    segment->LoadIndex(load_index_info);
+
+    // load index for float field
+    auto age_float_col = raw_data.get_col<float>(float_fid);
+    GenScalarIndexing(N, age_float_col.data());
+    auto age_float_index = milvus::scalar::CreateScalarIndexSort<float>();
+    age_float_index->Build(N, age_float_col.data());
+    load_index_info.field_id = float_fid.get();
+    load_index_info.field_type = Float;
+    load_index_info.index = std::shared_ptr<milvus::scalar::ScalarIndexSort<float>>(age_float_index.release());
+    segment->LoadIndex(load_index_info);
+
+    // load index for double field
+    auto age_double_col = raw_data.get_col<double>(double_fid);
+    GenScalarIndexing(N, age_double_col.data());
+    auto age_double_index = milvus::scalar::CreateScalarIndexSort<double>();
+    age_double_index->Build(N, age_double_col.data());
+    load_index_info.field_id = double_fid.get();
+    load_index_info.field_type = Float;
+    load_index_info.index = std::shared_ptr<milvus::scalar::ScalarIndexSort<double>>(age_double_index.release());
+    segment->LoadIndex(load_index_info);
+
+    // create retrieve plan
+    auto plan = std::make_unique<query::RetrievePlan>(*schema);
+    plan->plan_node_ = std::make_unique<query::RetrievePlanNode>();
+    std::vector<int64_t> retrive_row_ids = {age64_col[0]};
+    auto term_expr = std::make_unique<query::TermExprImpl<int64_t>>(i64_fid, DataType::INT64, retrive_row_ids);
+    plan->plan_node_->predicate_ = std::move(term_expr);
+    std::vector<FieldId> target_field_ids;
+
+    // retrieve value
+    target_field_ids = {i8_fid, i16_fid, i32_fid, i64_fid, float_fid, double_fid};
+    plan->field_ids_ = target_field_ids;
+
+    CRetrieveResult retrieve_result;
+    res = Retrieve(segment, plan.get(), raw_data.timestamps_[N - 1], &retrieve_result);
+    ASSERT_EQ(res.error_code, Success);
+    auto query_result = std::make_unique<proto::segcore::RetrieveResults>();
+    auto suc = query_result->ParseFromArray(retrieve_result.proto_blob, retrieve_result.proto_size);
+    ASSERT_TRUE(suc);
+    ASSERT_EQ(query_result->fields_data().size(), 6);
+    auto fields_data = query_result->fields_data();
+    for (auto iter = fields_data.begin(); iter < fields_data.end(); ++iter) {
+        switch (iter->type()) {
+            case proto::schema::DataType::Int8: {
+                ASSERT_EQ(iter->scalars().int_data().data(0), age8_col[0]);
+                break;
+            }
+            case proto::schema::DataType::Int16: {
+                ASSERT_EQ(iter->scalars().int_data().data(0), age16_col[0]);
+                break;
+            }
+            case proto::schema::DataType::Int32: {
+                ASSERT_EQ(iter->scalars().int_data().data(0), age32_col[0]);
+                break;
+            }
+            case proto::schema::DataType::Int64: {
+                ASSERT_EQ(iter->scalars().long_data().data(0), age64_col[0]);
+                break;
+            }
+            case proto::schema::DataType::Float: {
+                ASSERT_EQ(iter->scalars().float_data().data(0), age_float_col[0]);
+                break;
+            }
+            case proto::schema::DataType::Double: {
+                ASSERT_EQ(iter->scalars().double_data().data(0), age_double_col[0]);
+                break;
+            }
+            default: {
+                PanicInfo("not supported type");
+            }
+        }
+    }
+
+    DeleteRetrievePlan(plan.release());
+    DeleteRetrieveResult(&retrieve_result);
+
     DeleteSegment(segment);
 }

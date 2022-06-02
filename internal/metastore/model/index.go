@@ -8,6 +8,6 @@ type Index struct {
 	IndexID        int64
 	IndexName      string
 	IndexParams    []*commonpb.KeyValuePair
-	SegmentIndexes []SegmentIndex
+	SegmentIndexes map[int64]SegmentIndex //segmentID -> segmentIndex
 	Extra          map[string]string
 }

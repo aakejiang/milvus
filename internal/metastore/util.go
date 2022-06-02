@@ -20,6 +20,8 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/milvus-io/milvus/internal/metastore/model"
+
 	"github.com/golang/protobuf/proto"
 	"github.com/milvus-io/milvus/internal/metastore/model"
 	"github.com/milvus-io/milvus/internal/mq/msgstream"
@@ -121,18 +123,6 @@ func EncodeDdOperation(m proto.Message, ddType string) (string, error) {
 // DecodeDdOperation deserialize string to DdOperation
 func DecodeDdOperation(str string, ddOp *DdOperation) error {
 	return json.Unmarshal([]byte(str), ddOp)
-}
-
-func SegmentIndexInfoEqual(info1 *model.Index, info2 *model.Index) bool {
-	segmentIdx1 := info1.SegmentIndexes[0]
-	segmentIdx2 := info2.SegmentIndexes[0]
-
-	return info1.CollectionID == info2.CollectionID &&
-		segmentIdx1.Segment.PartitionID == segmentIdx2.Segment.PartitionID &&
-		segmentIdx1.Segment.SegmentID == segmentIdx2.Segment.SegmentID &&
-		info1.FieldID == info2.FieldID &&
-		info1.IndexID == info2.IndexID &&
-		segmentIdx1.EnableIndex == segmentIdx2.EnableIndex
 }
 
 // EncodeMsgPositions serialize []*MsgPosition into string

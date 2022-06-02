@@ -44,7 +44,6 @@ import (
 	"github.com/milvus-io/milvus/internal/util/sessionutil"
 	"github.com/milvus-io/milvus/internal/util/typeutil"
 	"github.com/stretchr/testify/assert"
-	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
 type proxyMock struct {
@@ -159,12 +158,21 @@ func TestGrpcService(t *testing.T) {
 		return nil
 	}
 
-	core.CallGetBinlogFilePathsService = func(ctx context.Context, segID typeutil.UniqueID, fieldID typeutil.UniqueID) ([]string, error) {
-		return []string{"file1", "file2", "file3"}, nil
+	core.CallGetRecoveryInfoService = func(ctx context.Context, collID, partID rootcoord.UniqueID) ([]*datapb.SegmentBinlogs, error) {
+		return []*datapb.SegmentBinlogs{
+			{
+				SegmentID: segID,
+				NumOfRows: rootcoord.Params.RootCoordCfg.MinSegmentSizeToEnableIndex,
+				FieldBinlogs: []*datapb.FieldBinlog{
+					{
+						FieldID: fieldID,
+						Binlogs: []*datapb.Binlog{{LogPath: "file1"}, {LogPath: "file2"}, {LogPath: "file3"}},
+					},
+				},
+			},
+		}, nil
 	}
-	core.CallGetNumRowsService = func(ctx context.Context, segID typeutil.UniqueID, isFromFlushedChan bool) (int64, error) {
-		return rootcoord.Params.RootCoordCfg.MinSegmentSizeToEnableIndex, nil
-	}
+
 	core.CallWatchChannels = func(ctx context.Context, collectionID int64, channelNames []string) error {
 		return nil
 	}
@@ -181,7 +189,7 @@ func TestGrpcService(t *testing.T) {
 
 	var binlogLock sync.Mutex
 	binlogPathArray := make([]string, 0, 16)
-	core.CallBuildIndexService = func(ctx context.Context, binlog []string, field *model.Field, idxInfo *model.Index, numRows int64) (typeutil.UniqueID, error) {
+	core.CallBuildIndexService = func(ctx context.Context, segID typeutil.UniqueID, binlog []string, field *model.Field, idxInfo *model.Index, numRows int64) (typeutil.UniqueID, error) {
 		binlogLock.Lock()
 		defer binlogLock.Unlock()
 		binlogPathArray = append(binlogPathArray, binlog...)

@@ -201,6 +201,47 @@ func (d *dataMock) GetSegmentInfo(ctx context.Context, req *datapb.GetSegmentInf
 	}, nil
 }
 
+func (d *dataMock) GetRecoveryInfo(ctx context.Context, req *datapb.GetRecoveryInfoRequest) (*datapb.GetRecoveryInfoResponse, error) {
+	var fieldBinlog []*datapb.FieldBinlog
+	for i := 0; i < 200; i++ {
+		binlog := &datapb.FieldBinlog{
+			FieldID: int64(i),
+			Binlogs: []*datapb.Binlog{
+				{
+					LogPath: fmt.Sprintf("file0-%d", i),
+				},
+				{
+					LogPath: fmt.Sprintf("file1-%d", i),
+				},
+				{
+					LogPath: fmt.Sprintf("file2-%d", i),
+				},
+			},
+		}
+		fieldBinlog = append(fieldBinlog, binlog)
+	}
+
+	d.mu.Lock()
+	segmentBinlogs := make([]*datapb.SegmentBinlogs, 0, len(d.segs))
+	for _, segID := range d.segs {
+		segmentBinlog := &datapb.SegmentBinlogs{
+			SegmentID:    segID,
+			NumOfRows:    Params.RootCoordCfg.MinSegmentSizeToEnableIndex,
+			FieldBinlogs: fieldBinlog,
+		}
+		segmentBinlogs = append(segmentBinlogs, segmentBinlog)
+	}
+	d.mu.Unlock()
+
+	return &datapb.GetRecoveryInfoResponse{
+		Status: &commonpb.Status{
+			ErrorCode: commonpb.ErrorCode_Success,
+			Reason:    "",
+		},
+		Binlogs: segmentBinlogs,
+	}, nil
+}
+
 func (d *dataMock) GetFlushedSegments(ctx context.Context, req *datapb.GetFlushedSegmentsRequest) (*datapb.GetFlushedSegmentsResponse, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -2949,25 +2990,21 @@ func TestCheckInit(t *testing.T) {
 	err = c.checkInit()
 	assert.Error(t, err)
 
-	c.CallGetBinlogFilePathsService = func(ctx context.Context, segID, fieldID typeutil.UniqueID) ([]string, error) {
-		return []string{}, nil
-	}
-	err = c.checkInit()
-	assert.Error(t, err)
-
-	c.CallGetNumRowsService = func(ctx context.Context, segID typeutil.UniqueID, isFromFlushedChan bool) (int64, error) {
-		return 0, nil
-	}
-	err = c.checkInit()
-	assert.Error(t, err)
-
 	c.CallGetFlushedSegmentsService = func(ctx context.Context, collID, partID typeutil.UniqueID) ([]typeutil.UniqueID, error) {
 		return nil, nil
 	}
+
 	err = c.checkInit()
 	assert.Error(t, err)
 
-	c.CallBuildIndexService = func(ctx context.Context, binlog []string, field *model.Field, idxInfo *model.Index, numRows int64) (typeutil.UniqueID, error) {
+	c.CallGetRecoveryInfoService = func(ctx context.Context, collID, partID UniqueID) ([]*datapb.SegmentBinlogs, error) {
+		return nil, nil
+	}
+
+	err = c.checkInit()
+	assert.Error(t, err)
+
+	c.CallBuildIndexService = func(ctx context.Context, segID UniqueID, binlog []string, field *model.Field, idxInfo *model.Index, numRows int64) (typeutil.UniqueID, error) {
 		return 0, nil
 	}
 	err = c.checkInit()
@@ -3157,7 +3194,7 @@ func TestCheckFlushedSegments(t *testing.T) {
 		core.MetaTable.indexID2Meta[indexID] = model.Index{
 			IndexID: indexID,
 		}
-		core.CallBuildIndexService = func(_ context.Context, binlog []string, field *model.Field, idx *model.Index, numRows int64) (int64, error) {
+		core.CallBuildIndexService = func(_ context.Context, segID UniqueID, binlog []string, field *model.Field, idx *model.Index, numRows int64) (int64, error) {
 			assert.Equal(t, fieldID, field.FieldID)
 			assert.Equal(t, indexID, idx.IndexID)
 			return -1, errors.New("build index build")
@@ -3166,7 +3203,7 @@ func TestCheckFlushedSegments(t *testing.T) {
 		core.checkFlushedSegments(ctx)
 
 		var indexBuildID int64 = 10001
-		core.CallBuildIndexService = func(_ context.Context, binlog []string, field *model.Field, idx *model.Index, numRows int64) (int64, error) {
+		core.CallBuildIndexService = func(_ context.Context, segID UniqueID, binlog []string, field *model.Field, idx *model.Index, numRows int64) (int64, error) {
 			return indexBuildID, nil
 		}
 		core.checkFlushedSegments(core.ctx)
@@ -3328,8 +3365,8 @@ func TestCore_DescribeSegments(t *testing.T) {
 					CollectionID: collID,
 					FieldID:      fieldID,
 					IndexID:      indexID,
-					SegmentIndexes: []model.SegmentIndex{
-						{
+					SegmentIndexes: map[int64]model.SegmentIndex{
+						segID: {
 							Segment: model.Segment{
 								PartitionID: partID,
 								SegmentID:   segID,

@@ -9,7 +9,8 @@
 // is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
 // or implied. See the License for the specific language governing permissions and limitations under the License
 
-#include "Utils.h"
+#include "segcore/Utils.h"
+#include "index/ScalarIndex.h"
 
 namespace milvus::segcore {
 
@@ -256,6 +257,115 @@ MergeDataArray(std::vector<std::pair<milvus::SearchResult*, int64_t>>& result_of
     return data_array;
 }
 
+// TODO: split scalar IndexBase with knowhere::Index
+std::unique_ptr<DataArray>
+ReverseDataFromIndex(const knowhere::Index* index,
+                     const int64_t* seg_offsets,
+                     int64_t count,
+                     const FieldMeta& field_meta) {
+    auto data_type = field_meta.get_data_type();
+    auto data_array = std::make_unique<DataArray>();
+    data_array->set_field_id(field_meta.get_id().get());
+    data_array->set_type(milvus::proto::schema::DataType(field_meta.get_data_type()));
+
+    auto scalar_array = data_array->mutable_scalars();
+    switch (data_type) {
+        case DataType::BOOL: {
+            using IndexType = scalar::ScalarIndex<bool>;
+            auto ptr = dynamic_cast<const IndexType*>(index);
+            std::vector<bool> raw_data(count);
+            for (int64_t i = 0; i < count; ++i) {
+                raw_data[i] = ptr->Reverse_Lookup(seg_offsets[i]);
+            }
+            auto obj = scalar_array->mutable_bool_data();
+            *(obj->mutable_data()) = {raw_data.begin(), raw_data.end()};
+            break;
+        }
+        case DataType::INT8: {
+            using IndexType = scalar::ScalarIndex<int8_t>;
+            auto ptr = dynamic_cast<const IndexType*>(index);
+            std::vector<int8_t> raw_data(count);
+            for (int64_t i = 0; i < count; ++i) {
+                raw_data[i] = ptr->Reverse_Lookup(seg_offsets[i]);
+            }
+            auto obj = scalar_array->mutable_int_data();
+            *(obj->mutable_data()) = {raw_data.begin(), raw_data.end()};
+            break;
+        }
+        case DataType::INT16: {
+            using IndexType = scalar::ScalarIndex<int16_t>;
+            auto ptr = dynamic_cast<const IndexType*>(index);
+            std::vector<int16_t> raw_data(count);
+            for (int64_t i = 0; i < count; ++i) {
+                raw_data[i] = ptr->Reverse_Lookup(seg_offsets[i]);
+            }
+            auto obj = scalar_array->mutable_int_data();
+            *(obj->mutable_data()) = {raw_data.begin(), raw_data.end()};
+            break;
+        }
+        case DataType::INT32: {
+            using IndexType = scalar::ScalarIndex<int32_t>;
+            auto ptr = dynamic_cast<const IndexType*>(index);
+            std::vector<int32_t> raw_data(count);
+            for (int64_t i = 0; i < count; ++i) {
+                raw_data[i] = ptr->Reverse_Lookup(seg_offsets[i]);
+            }
+            auto obj = scalar_array->mutable_int_data();
+            *(obj->mutable_data()) = {raw_data.begin(), raw_data.end()};
+            break;
+        }
+        case DataType::INT64: {
+            using IndexType = scalar::ScalarIndex<int64_t>;
+            auto ptr = dynamic_cast<const IndexType*>(index);
+            std::vector<int64_t> raw_data(count);
+            for (int64_t i = 0; i < count; ++i) {
+                raw_data[i] = ptr->Reverse_Lookup(seg_offsets[i]);
+            }
+            auto obj = scalar_array->mutable_long_data();
+            *(obj->mutable_data()) = {raw_data.begin(), raw_data.end()};
+            break;
+        }
+        case DataType::FLOAT: {
+            using IndexType = scalar::ScalarIndex<float>;
+            auto ptr = dynamic_cast<const IndexType*>(index);
+            std::vector<float> raw_data(count);
+            for (int64_t i = 0; i < count; ++i) {
+                raw_data[i] = ptr->Reverse_Lookup(seg_offsets[i]);
+            }
+            auto obj = scalar_array->mutable_float_data();
+            *(obj->mutable_data()) = {raw_data.begin(), raw_data.end()};
+            break;
+        }
+        case DataType::DOUBLE: {
+            using IndexType = scalar::ScalarIndex<double>;
+            auto ptr = dynamic_cast<const IndexType*>(index);
+            std::vector<double> raw_data(count);
+            for (int64_t i = 0; i < count; ++i) {
+                raw_data[i] = ptr->Reverse_Lookup(seg_offsets[i]);
+            }
+            auto obj = scalar_array->mutable_double_data();
+            *(obj->mutable_data()) = {raw_data.begin(), raw_data.end()};
+            break;
+        }
+        case DataType::VARCHAR: {
+            using IndexType = scalar::ScalarIndex<std::string>;
+            auto ptr = dynamic_cast<const IndexType*>(index);
+            std::vector<std::string> raw_data(count);
+            for (int64_t i = 0; i < count; ++i) {
+                raw_data[i] = ptr->Reverse_Lookup(seg_offsets[i]);
+            }
+            auto obj = scalar_array->mutable_string_data();
+            *(obj->mutable_data()) = {raw_data.begin(), raw_data.end()};
+            break;
+        }
+        default: {
+            PanicInfo("unsupported datatype");
+        }
+    }
+
+    return data_array;
+}
+
 // insert_barrier means num row of insert data in a segment
 // del_barrier means that if the pk of the insert data is in delete record[0 : del_barrier]
 // then the data corresponding to this pk may be ignored when searching/querying
@@ -305,14 +415,25 @@ get_deleted_bitmap(int64_t del_barrier,
         auto [iter_b, iter_e] = pk2offset.equal_range(pk);
         for (auto iter = iter_b; iter != iter_e; ++iter) {
             auto insert_row_offset = iter->second;
+            // for now, insert_barrier == insert count of segment, so this Assert will always work
             AssertInfo(insert_row_offset < insert_barrier, "Timestamp offset is larger than insert barrier");
-            if (delete_record.timestamps_[del_index] > query_timestamp) {
-                // the deletion record do not take effect in search/query, and reset bitmap to 0
+
+            // insert after delete with same pk, delete will not task effect on this insert record
+            // and reset bitmap to 0
+            if (insert_record.timestamps_[insert_row_offset] > delete_record.timestamps_[del_index]) {
                 bitmap->reset(insert_row_offset);
-            } else {
-                // insert data corresponding to the insert_row_offset will be ignored in search/query
-                bitmap->set(insert_row_offset);
+                continue;
             }
+
+            // the deletion record do not take effect in search/query
+            // and reset bitmap to 0
+            if (delete_record.timestamps_[del_index] > query_timestamp) {
+                bitmap->reset(insert_row_offset);
+                continue;
+            }
+
+            // insert data corresponding to the insert_row_offset will be ignored in search/query
+            bitmap->set(insert_row_offset);
         }
     }
     delete_record.insert_lru_entry(current);

@@ -61,6 +61,7 @@ type insertBufferNode struct {
 
 	flushMap         sync.Map
 	flushChan        <-chan flushMsg
+	resendTTChan     <-chan resendTTMsg
 	flushingSegCache *Cache
 	flushManager     flushManager
 
@@ -347,6 +348,10 @@ func (ibNode *insertBufferNode) Operate(in []Msg) []Msg {
 					dropped:   false,
 				})
 			}
+		case resendTTMsg := <-ibNode.resendTTChan:
+			log.Info("resend TT msg received in insertBufferNode",
+				zap.Int64s("segment IDs", resendTTMsg.segmentIDs))
+			ibNode.writeHardTimeTick(fgMsg.timeRange.timestampMax, resendTTMsg.segmentIDs)
 		default:
 		}
 	}
@@ -520,8 +525,8 @@ func (ibNode *insertBufferNode) getCollectionandPartitionIDbySegID(segmentID Uni
 	return ibNode.replica.getCollectionAndPartitionID(segmentID)
 }
 
-func newInsertBufferNode(ctx context.Context, collID UniqueID, flushCh <-chan flushMsg, fm flushManager,
-	flushingSegCache *Cache, config *nodeConfig) (*insertBufferNode, error) {
+func newInsertBufferNode(ctx context.Context, collID UniqueID, flushCh <-chan flushMsg, resendTTCh <-chan resendTTMsg,
+	fm flushManager, flushingSegCache *Cache, config *nodeConfig) (*insertBufferNode, error) {
 
 	baseNode := BaseNode{}
 	baseNode.SetMaxQueueLength(config.maxQueueLength)
@@ -581,6 +586,7 @@ func newInsertBufferNode(ctx context.Context, collID UniqueID, flushCh <-chan fl
 		timeTickStream:   wTtMsgStream,
 		flushMap:         sync.Map{},
 		flushChan:        flushCh,
+		resendTTChan:     resendTTCh,
 		flushingSegCache: flushingSegCache,
 		flushManager:     fm,
 

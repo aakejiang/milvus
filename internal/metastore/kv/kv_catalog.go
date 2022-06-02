@@ -335,12 +335,12 @@ func (kc *Catalog) DropIndex(ctx context.Context, collectionInfo *model.Collecti
 
 func (kc *Catalog) DropCredential(ctx context.Context, username string) error {
 	k := fmt.Sprintf("%s/%s", metastore.CredentialPrefix, username)
-
 	err := kc.Txn.Remove(k)
 	if err != nil {
 		log.Error("drop credential update meta fail", zap.String("key", k), zap.Error(err))
 		return fmt.Errorf("drop credential update meta fail key:%s, err:%w", username, err)
 	}
+
 	return nil
 }
 
@@ -388,6 +388,7 @@ func (kc *Catalog) ListCollections(ctx context.Context, ts typeutil.Timestamp) (
 			zap.Error(err))
 		return nil, nil
 	}
+
 	colls := make(map[string]*model.Collection)
 	for _, val := range vals {
 		collMeta := pb.CollectionInfo{}
@@ -439,12 +440,15 @@ func (kc *Catalog) listSegmentIndexes(ctx context.Context) (map[int64]*model.Ind
 			continue
 		}
 
-		index := ConvertSegmentIndexPBToModel(&segmentIndexInfo)
-		if _, ok := indexes[segmentIndexInfo.IndexID]; ok {
-			log.Warn("duplicated index id exists in segment index meta", zap.Int64("index id", segmentIndexInfo.IndexID))
+		newIndex := ConvertSegmentIndexPBToModel(&segmentIndexInfo)
+		oldIndex, ok := indexes[segmentIndexInfo.IndexID]
+		if ok {
+			for segID, segmentIdxInfo := range newIndex.SegmentIndexes {
+				oldIndex.SegmentIndexes[segID] = segmentIdxInfo
+			}
+		} else {
+			indexes[segmentIndexInfo.IndexID] = newIndex
 		}
-
-		indexes[segmentIndexInfo.IndexID] = index
 	}
 
 	return indexes, nil
@@ -476,6 +480,7 @@ func (kc *Catalog) listIndexMeta(ctx context.Context) (map[int64]*model.Index, e
 
 		indexes[meta.IndexID] = index
 	}
+
 	return indexes, nil
 }
 

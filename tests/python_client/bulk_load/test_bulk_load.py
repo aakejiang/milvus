@@ -28,30 +28,7 @@ def entity_suffix(entities):
     return suffix
 
 
-def gen_file_prefix(row_based=True, auto_id=True, prefix=""):
-    if row_based:
-        if auto_id:
-            return f"{prefix}row_auto"
-        else:
-            return f"{prefix}row_cust"
-    else:
-        if auto_id:
-            return f"{prefix}col_auto"
-        else:
-            return f"{prefix}col_cust"
-
-
 class TestBulkLoad(TestcaseBase):
-
-    def setup_class(self):
-        log.info("[setup_import] Start setup class...")
-        # TODO: copy data files to minio
-        log.info("copy data files to minio")
-
-    def teardown_class(self):
-        log.info("[teardown_import] Start teardown class...")
-        # TODO: clean up data or not is a question
-        log.info("clean up data files in minio")
 
     @pytest.mark.tags(CaseLabel.L3)
     @pytest.mark.parametrize("row_based", [True, False])
@@ -100,14 +77,19 @@ class TestBulkLoad(TestcaseBase):
         # verify imported data is available for search
         self.collection_wrap.load()
         # log.info(f"query seg info: {self.utility_wrap.get_query_segment_info(c_name)[0]}")
-        search_data = cf.gen_vectors(1, dim)
+        nq = 2
+        topk = 2
+        search_data = cf.gen_vectors(nq, dim)
         search_params = {"metric_type": "L2", "params": {"nprobe": 2}}
         res, _ = self.collection_wrap.search(search_data, df.vec_field,
-                                             param=search_params, limit=1,
+                                             param=search_params, limit=topk,
                                              check_task=CheckTasks.check_search_results,
-                                             check_items={"nq": 1,
-                                                          "limit": 1})
-        # self.collection_wrap.query(expr=f"id in {ids}")
+                                             check_items={"nq": nq,
+                                                          "limit": topk})
+        for hits in res:
+            ids = hits.ids
+            results, _ = self.collection_wrap.query(expr=f"{df.pk_field} in {ids}")
+            assert len(results) == len(ids)
 
     @pytest.mark.tags(CaseLabel.L3)
     @pytest.mark.parametrize("row_based", [True, False])
@@ -154,14 +136,21 @@ class TestBulkLoad(TestcaseBase):
         # verify imported data is available for search
         self.collection_wrap.load()
         log.info(f"query seg info: {self.utility_wrap.get_query_segment_info(c_name)[0]}")
-        search_data = cf.gen_vectors(1, dim)
+        nq = 3
+        topk = 2
+        search_data = cf.gen_vectors(nq, dim)
         search_params = {"metric_type": "L2", "params": {"nprobe": 2}}
         res, _ = self.collection_wrap.search(search_data, df.vec_field,
-                                             param=search_params, limit=1,
+                                             param=search_params, limit=topk,
                                              check_task=CheckTasks.check_search_results,
-                                             check_items={"nq": 1,
-                                                          "limit": 1})
-        # self.collection_wrap.query(expr=f"id in {ids}")
+                                             check_items={"nq": nq,
+                                                          "limit": topk})
+        for hits in res:
+            ids = hits.ids
+            expr = f"{df.pk_field} in {ids}"
+            expr = expr.replace("'", "\"")
+            results, _ = self.collection_wrap.query(expr=expr)
+            assert len(results) == len(ids)
 
     @pytest.mark.tags(CaseLabel.L3)
     @pytest.mark.parametrize("row_based", [True, False])
@@ -223,14 +212,19 @@ class TestBulkLoad(TestcaseBase):
         assert res == exp_res
 
         log.info(f"query seg info: {self.utility_wrap.get_query_segment_info(c_name)[0]}")
-
-        search_data = cf.gen_vectors(1, dim)
+        nq = 10
+        topk = 5
+        search_data = cf.gen_vectors(nq, dim)
         search_params = {"metric_type": "L2", "params": {"nprobe": 16}}
         res, _ = self.collection_wrap.search(search_data, df.vec_field,
-                                             param=search_params, limit=1,
+                                             param=search_params, limit=topk,
                                              check_task=CheckTasks.check_search_results,
-                                             check_items={"nq": 1,
-                                                          "limit": 1})
+                                             check_items={"nq": nq,
+                                                          "limit": topk})
+        for hits in res:
+            ids = hits.ids
+            results, _ = self.collection_wrap.query(expr=f"{df.pk_field} in {ids}")
+            assert len(results) == len(ids)
 
     @pytest.mark.tags(CaseLabel.L3)
     @pytest.mark.parametrize("row_based", [True, False])
@@ -302,6 +296,10 @@ class TestBulkLoad(TestcaseBase):
                                              check_task=CheckTasks.check_search_results,
                                              check_items={"nq": 1,
                                                           "limit": 1})
+        for hits in res:
+            ids = hits.ids
+            results, _ = self.collection_wrap.query(expr=f"{df.pk_field} in {ids}")
+            assert len(results) == len(ids)
 
     @pytest.mark.tags(CaseLabel.L3)
     @pytest.mark.parametrize("row_based", [True, False])
@@ -384,8 +382,10 @@ class TestBulkLoad(TestcaseBase):
                                                  check_task=CheckTasks.check_search_results,
                                                  check_items={"nq": 1,
                                                               "limit": 1})
-
-            # self.collection_wrap.query(expr=f"id in {ids}")
+            for hits in res:
+                ids = hits.ids
+                results, _ = self.collection_wrap.query(expr=f"{df.pk_field} in {ids}")
+                assert len(results) == len(ids)
 
             # build index
             index_params = {"index_type": "HNSW", "params": {"M": 8, "efConstruction": 100}, "metric_type": "IP"}
@@ -406,6 +406,10 @@ class TestBulkLoad(TestcaseBase):
                                                  check_task=CheckTasks.check_search_results,
                                                  check_items={"nq": 1,
                                                               "limit": 1})
+            for hits in res:
+                ids = hits.ids
+                results, _ = self.collection_wrap.query(expr=f"{df.pk_field} in {ids}")
+                assert len(results) == len(ids)
 
     @pytest.mark.tags(CaseLabel.L3)
     @pytest.mark.parametrize("row_based", [True, False])
@@ -488,8 +492,12 @@ class TestBulkLoad(TestcaseBase):
                                                  check_task=CheckTasks.check_search_results,
                                                  check_items={"nq": 1,
                                                               "limit": 1})
-
-            # self.collection_wrap.query(expr=f"id in {ids}")
+            for hits in res:
+                ids = hits.ids
+                expr = f"{df.pk_field} in {ids}"
+                expr = expr.replace("'", "\"")
+                results, _ = self.collection_wrap.query(expr=expr)
+                assert len(results) == len(ids)
 
             # build index
             index_params = {"index_type": "HNSW", "params": {"M": 8, "efConstruction": 100}, "metric_type": "IP"}
@@ -510,6 +518,12 @@ class TestBulkLoad(TestcaseBase):
                                                  check_task=CheckTasks.check_search_results,
                                                  check_items={"nq": 1,
                                                               "limit": 1})
+            for hits in res:
+                ids = hits.ids
+                expr = f"{df.pk_field} in {ids}"
+                expr = expr.replace("'", "\"")
+                results, _ = self.collection_wrap.query(expr=expr)
+                assert len(results) == len(ids)
 
     @pytest.mark.tags(CaseLabel.L3)
     @pytest.mark.parametrize("row_based", [True, False])      # True, False
@@ -583,15 +597,19 @@ class TestBulkLoad(TestcaseBase):
             # assert res == exp_res
 
             # verify search and query
-            search_data = cf.gen_vectors(1, dim)
+            nq = 5
+            topk = 1
+            search_data = cf.gen_vectors(nq, dim)
             search_params = ct.default_search_params
             res, _ = self.collection_wrap.search(search_data, df.vec_field,
-                                                 param=search_params, limit=1,
+                                                 param=search_params, limit=topk,
                                                  check_task=CheckTasks.check_search_results,
-                                                 check_items={"nq": 1,
-                                                              "limit": 1})
-
-            # self.collection_wrap.query(expr=f"id in {ids}")
+                                                 check_items={"nq": nq,
+                                                              "limit": topk})
+            for hits in res:
+                ids = hits.ids
+                results, _ = self.collection_wrap.query(expr=f"{df.pk_field} in {ids}")
+                assert len(results) == len(ids)
 
     @pytest.mark.tags(CaseLabel.L3)
     @pytest.mark.parametrize("row_based", [True, False])
@@ -674,14 +692,19 @@ class TestBulkLoad(TestcaseBase):
             # verify imported data is available for search
             self.collection_wrap.load()
             log.info(f"query seg info: {self.utility_wrap.get_query_segment_info(c_name)[0]}")
-            search_data = cf.gen_vectors(1, dim)
+            nq = 2
+            topk = 5
+            search_data = cf.gen_vectors(nq, dim)
             search_params = {"metric_type": "L2", "params": {"nprobe": 2}}
             res, _ = self.collection_wrap.search(search_data, df.vec_field,
-                                                 param=search_params, limit=1,
+                                                 param=search_params, limit=topk,
                                                  check_task=CheckTasks.check_search_results,
-                                                 check_items={"nq": 1,
-                                                              "limit": 1})
-            # self.collection_wrap.query(expr=f"id in {ids}")
+                                                 check_items={"nq": nq,
+                                                              "limit": topk})
+            for hits in res:
+                ids = hits.ids
+                results, _ = self.collection_wrap.query(expr=f"{df.pk_field} in {ids}")
+                assert len(results) == len(ids)
 
     @pytest.mark.tags(CaseLabel.L3)
     @pytest.mark.parametrize("row_based", [True, False])
@@ -907,83 +930,6 @@ class TestBulkLoad(TestcaseBase):
     # TODO: not supported yet
     def test_from_customize_bucket(self):
         pass
-
-#     @pytest.mark.tags(CaseLabel.L3)
-#     @pytest.mark.parametrize("row_based", [True, False])
-#     @pytest.mark.parametrize("auto_id", [True, False])
-#     def test_auto_id_binary_vector_string_scalar(self, row_based, auto_id):
-#         """
-#         collection:
-#         collection schema: [pk, binary_vector, string_scalar]
-#         1. create collection
-#         2. insert some data
-#         3. import data
-#         4. verify data entities
-#         5. build index
-#         6. load collection
-#         7. verify search and query
-#         """
-#         pass
-#
-#     @pytest.mark.tags(CaseLabel.L3)
-#     def test_custom_id_float_vector_string_primary(self):
-#         """
-#         collection: custom_id
-#         collection schema: float vectors and string primary key
-#         """
-#         pass
-#
-#     @pytest.mark.tags(CaseLabel.L3)
-#     def test_custom_id_float_partition_vector_string_primary(self):
-#         """
-#         collection: custom_id and custom partition
-#         collection schema: float vectors and string primary key
-#         """
-#         pass
-#
-#     @pytest.mark.tags(CaseLabel.L3)
-#     def test_custom_id_binary_vector_int_primary_from_bucket(self):
-#         """
-#         collection: custom_id
-#         collection schema: binary vectors and int primary key
-#         import from a particular bucket
-#         """
-#         pass
-#
-#     @pytest.mark.tags(CaseLabel.L3)
-#     def test_custom_id_binary_vector_string_primary_multi_scalars_twice(self):
-#         """
-#         collection: custom_id
-#         collection schema: binary vectors, string primary key and multiple scalars
-#         import twice
-#         """
-#         pass
-#
-#     @pytest.mark.tags(CaseLabel.L3)
-#     def test_custom_id_float_vector_int_primary_multi_scalars_twice(self):
-#         """
-#         collection: custom_id
-#         collection schema: float vectors, int primary key and multiple scalars
-#         import twice
-#         """
-#         pass
-#
-#
-# class TestColumnBasedImport(TestcaseBase):
-#     @pytest.mark.tags(CaseLabel.L3)
-#     def test_auto_id_float_vector(self):
-#         """
-#         collection: auto_id
-#         collection schema: [auto_id, float vector]
-#         Steps:
-#         1. create collection
-#         2. import column based data file
-#         3. verify the data entities equal the import data
-#         4. load the collection
-#         5. verify search successfully
-#         6. verify query successfully
-#         """
-#         pass
 
 
 class TestBulkLoadInvalidParams(TestcaseBase):
@@ -1777,7 +1723,103 @@ class TestBulkLoadInvalidParams(TestcaseBase):
             assert failed_reason in state.infos.get("failed_reason", "")
         assert self.collection_wrap.num_entities == 0
 
-    # TODO: string data on float field
+    @pytest.mark.tags(CaseLabel.L3)
+    @pytest.mark.parametrize("row_based", [True, False])
+    @pytest.mark.parametrize("auto_id", [True, False])
+    @pytest.mark.parametrize("dim", [9])
+    @pytest.mark.parametrize("entities", [10])
+    def test_data_type_str_on_float_scalar(self, row_based, auto_id, dim, entities):
+        """
+        collection schema: [pk, float_vector,
+                        float_scalar, int_scalar, string_scalar, bool_scalar]
+        data files: json file that entities has string data on float scalars
+        Steps:
+        1. create collection
+        2. import data
+        3. verify import failed with errors
+        """
+        files = prepare_bulk_load_json_files(row_based=row_based, rows=entities,
+                                             dim=dim, auto_id=auto_id,
+                                             data_fields=default_multi_fields,
+                                             err_type=DataErrorType.str_on_float_scalar,
+                                             scalars=default_multi_fields)
+        self._connect()
+        c_name = cf.gen_unique_str()
+        fields = [cf.gen_int64_field(name=df.pk_field, is_primary=True),
+                  cf.gen_float_vec_field(name=df.vec_field, dim=dim),
+                  cf.gen_int32_field(name=df.int_field),
+                  cf.gen_float_field(name=df.float_field),
+                  cf.gen_string_field(name=df.string_field),
+                  cf.gen_bool_field(name=df.bool_field)
+                  ]
+        schema = cf.gen_collection_schema(fields=fields, auto_id=auto_id)
+        self.collection_wrap.init_collection(c_name, schema=schema)
+        # import data
+        task_ids, _ = self.utility_wrap.bulk_load(collection_name=c_name,
+                                                  row_based=row_based,
+                                                  files=files)
+        logging.info(f"bulk load task ids:{task_ids}")
+        success, states = self.utility_wrap.wait_for_bulk_load_tasks_completed(
+            task_ids=task_ids,
+            timeout=30)
+        log.info(f"bulk load state:{success}")
+        assert not success
+        failed_reason = "illegal numeric value"
+        for state in states.values():
+            assert state.state_name == "BulkLoadFailed"
+            assert failed_reason in state.infos.get("failed_reason", "")
+        assert self.collection_wrap.num_entities == 0
+
+    @pytest.mark.tags(CaseLabel.L3)
+    @pytest.mark.parametrize("row_based", [True, False])
+    @pytest.mark.parametrize("auto_id", [True, False])
+    @pytest.mark.parametrize("float_vector", [True, False])
+    @pytest.mark.parametrize("dim", [8])
+    @pytest.mark.parametrize("entities", [500])
+    def test_data_type_str_on_vector_fields(self, row_based, auto_id, float_vector, dim, entities):
+        """
+        collection schema: [pk, float_vector,
+                        float_scalar, int_scalar, string_scalar, bool_scalar]
+        data files: json file that entities has string data on vectors
+        Steps:
+        1. create collection
+        2. import data
+        3. verify import failed with errors
+        """
+        files = prepare_bulk_load_json_files(row_based=row_based, rows=entities,
+                                             dim=dim, auto_id=auto_id, float_vector=float_vector,
+                                             data_fields=default_multi_fields,
+                                             err_type=DataErrorType.str_on_vector_field,
+                                             wrong_position=entities // 2,
+                                             scalars=default_multi_fields, force=True)
+        self._connect()
+        c_name = cf.gen_unique_str()
+        fields = [cf.gen_int64_field(name=df.pk_field, is_primary=True),
+                  cf.gen_float_vec_field(name=df.vec_field, dim=dim),
+                  cf.gen_int32_field(name=df.int_field),
+                  cf.gen_float_field(name=df.float_field),
+                  cf.gen_string_field(name=df.string_field),
+                  cf.gen_bool_field(name=df.bool_field)
+                  ]
+        schema = cf.gen_collection_schema(fields=fields, auto_id=auto_id)
+        self.collection_wrap.init_collection(c_name, schema=schema)
+        # import data
+        task_ids, _ = self.utility_wrap.bulk_load(collection_name=c_name,
+                                                  row_based=row_based,
+                                                  files=files)
+        logging.info(f"bulk load task ids:{task_ids}")
+        success, states = self.utility_wrap.wait_for_bulk_load_tasks_completed(
+            task_ids=task_ids,
+            timeout=30)
+        log.info(f"bulk load state:{success}")
+        assert not success
+        failed_reason = "illegal numeric value"
+        if not float_vector:
+            failed_reason = f"doesn't equal to vector dimension {dim} of field vectors"
+        for state in states.values():
+            assert state.state_name == "BulkLoadFailed"
+            assert failed_reason in state.infos.get("failed_reason", "")
+        assert self.collection_wrap.num_entities == 0
 
 
 @pytest.mark.skip()

@@ -287,7 +287,7 @@ func TestMetaTable(t *testing.T) {
 		assert.Nil(t, err)
 		assert.Equal(t, uint64(1), ts)
 
-		collMeta, err := mt.GetCollectionByName(collName, 0)
+		collMeta, err := mt.GetCollectionByName(collName, ts)
 		assert.Nil(t, err)
 		assert.Equal(t, collMeta.CreateTime, ts)
 		assert.Equal(t, collMeta.Partitions[0].PartitionCreatedTimestamp, ts)
@@ -364,13 +364,14 @@ func TestMetaTable(t *testing.T) {
 			CollectionID: collID,
 			FieldID:      fieldID,
 			IndexID:      indexID,
-			SegmentIndexes: []model.SegmentIndex{
-				{
+			SegmentIndexes: map[int64]model.SegmentIndex{
+				segID: {
 					Segment: model.Segment{
 						SegmentID:   segID,
 						PartitionID: partID,
 					},
-					BuildID: buildID,
+					BuildID:     buildID,
+					EnableIndex: true,
 				},
 			},
 		}
@@ -380,6 +381,12 @@ func TestMetaTable(t *testing.T) {
 		// it's legal to add index twice
 		err = mt.AlterIndex(&index)
 		assert.Nil(t, err)
+
+		idxMeta, ok := mt.segID2IndexMeta[segID]
+		assert.True(t, ok)
+		segMeta, ok := idxMeta[indexID]
+		assert.True(t, ok)
+		assert.True(t, segMeta.SegmentIndexes[segID].EnableIndex)
 	})
 
 	wg.Add(1)
@@ -401,7 +408,7 @@ func TestMetaTable(t *testing.T) {
 			IndexParams: params,
 		}
 
-		_, _, err := mt.GetNotIndexedSegments("collTest", "field110", idxInfo, nil)
+		err := mt.AddIndex("collTest", "field110", idxInfo, []typeutil.UniqueID{segID})
 		assert.NotNil(t, err)
 	})
 
@@ -756,8 +763,8 @@ func TestMetaTable(t *testing.T) {
 			CollectionID: collID,
 			FieldID:      fieldID,
 			IndexID:      indexID2,
-			SegmentIndexes: []model.SegmentIndex{
-				{
+			SegmentIndexes: map[int64]model.SegmentIndex{
+				segID: {
 					Segment: model.Segment{
 						SegmentID:   segID,
 						PartitionID: partID,
@@ -880,14 +887,14 @@ func TestMetaTable(t *testing.T) {
 
 		index, err := mt.GetSegmentIndexInfoByID(segID2, fieldID, "abc")
 		assert.Nil(t, err)
-		assert.Equal(t, segID2, index.SegmentIndexes[0].Segment.SegmentID)
+		assert.Equal(t, segID2, index.SegmentIndexes[segID2].Segment.SegmentID)
 		assert.Equal(t, fieldID, index.FieldID)
-		assert.Equal(t, false, index.SegmentIndexes[0].EnableIndex)
+		assert.Equal(t, false, index.SegmentIndexes[segID2].EnableIndex)
 
 		segIdxInfo := model.Index{
 			CollectionID: collID,
-			SegmentIndexes: []model.SegmentIndex{
-				{
+			SegmentIndexes: map[int64]model.SegmentIndex{
+				segID: {
 					Segment: model.Segment{
 						SegmentID:   segID,
 						PartitionID: partID,
@@ -1285,8 +1292,8 @@ func TestMetaTable_GetSegmentIndexInfos(t *testing.T) {
 			CollectionID: 1,
 			FieldID:      4,
 			IndexID:      5,
-			SegmentIndexes: []model.SegmentIndex{
-				{
+			SegmentIndexes: map[int64]model.SegmentIndex{
+				segID: {
 					Segment: model.Segment{
 						SegmentID:   segID,
 						PartitionID: 2,
@@ -1302,7 +1309,7 @@ func TestMetaTable_GetSegmentIndexInfos(t *testing.T) {
 	indexInfos, ok := infos[5]
 	assert.True(t, ok)
 	assert.Equal(t, typeutil.UniqueID(1), indexInfos.CollectionID)
-	segmentIndex := indexInfos.SegmentIndexes[0]
+	segmentIndex := indexInfos.SegmentIndexes[segID]
 	segment := segmentIndex.Segment
 	assert.Equal(t, typeutil.UniqueID(2), segment.PartitionID)
 	assert.Equal(t, segID, segment.SegmentID)

@@ -57,7 +57,6 @@ jobs:
           shell: bash
           command: |
             pip install -r tests/python_client/requirements.txt --trusted-host https://test.pypi.org
-            pip install --upgrade protobuf
       
       - name: Deploy Chaos Mesh
         timeout-minutes: 2
@@ -217,7 +216,7 @@ jobs:
           bash ../../scripts/export_log_k8s.sh chaos-testing chaos-daemon k8s_logs/chaos-mesh-daemon
       
       - name: Upload logs
-        if: ${{ always() }}
+        if: ${{ failure() }}
         uses: actions/upload-artifact@v2
         with:
           name: logs-${{ matrix.pod }}

@@ -629,6 +629,23 @@ func (node *DataNode) FlushSegments(ctx context.Context, req *datapb.FlushSegmen
 	}, nil
 }
 
+// ResendSegmentStats resend un-flushed segment stats back upstream to DataCoord by resending DataNode time tick message.
+// It returns a list of segments to be sent.
+func (node *DataNode) ResendSegmentStats(ctx context.Context, req *datapb.ResendSegmentStatsRequest) (*datapb.ResendSegmentStatsResponse, error) {
+	log.Info("start resending segment stats, if any",
+		zap.Int64("DataNode ID", node.NodeID))
+	segResent := node.flowgraphManager.resendTT()
+	log.Info("found segment(s) with stats to resend",
+		zap.Int64s("segment IDs", segResent))
+	return &datapb.ResendSegmentStatsResponse{
+		Status: &commonpb.Status{
+			ErrorCode: commonpb.ErrorCode_Success,
+			Reason:    "",
+		},
+		SegResent: segResent,
+	}, nil
+}
+
 // Stop will release DataNode resources and shutdown datanode
 func (node *DataNode) Stop() error {
 	// https://github.com/milvus-io/milvus/issues/12282
@@ -779,19 +796,22 @@ func (node *DataNode) Compaction(ctx context.Context, req *datapb.CompactionPlan
 
 // Import data files(json, numpy, etc.) on MinIO/S3 storage, read and parse them into sealed segments
 func (node *DataNode) Import(ctx context.Context, req *datapb.ImportTaskRequest) (*commonpb.Status, error) {
-	log.Info("receive import request",
+	log.Info("DataNode receive import request",
 		zap.Int64("task ID", req.GetImportTask().GetTaskId()),
 		zap.Int64("collection ID", req.GetImportTask().GetCollectionId()),
 		zap.Int64("partition ID", req.GetImportTask().GetPartitionId()),
 		zap.Any("channel names", req.GetImportTask().GetChannelNames()),
 		zap.Any("working dataNodes", req.WorkingNodes))
+	defer func() {
+		log.Info("DataNode finish import request", zap.Int64("task ID", req.GetImportTask().GetTaskId()))
+	}()
 
 	importResult := &rootcoordpb.ImportResult{
 		Status: &commonpb.Status{
 			ErrorCode: commonpb.ErrorCode_Success,
 		},
 		TaskId:     req.GetImportTask().TaskId,
-		DatanodeId: Params.DataNodeCfg.GetNodeID(),
+		DatanodeId: node.NodeID,
 		State:      commonpb.ImportState_ImportStarted,
 		Segments:   make([]int64, 0),
 		AutoIds:    make([]int64, 0),

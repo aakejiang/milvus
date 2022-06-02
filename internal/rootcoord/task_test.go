@@ -76,8 +76,8 @@ func TestDescribeSegmentsReqTask_Execute(t *testing.T) {
 					CollectionID: collID,
 					FieldID:      fieldID,
 					IndexID:      indexID,
-					SegmentIndexes: []model.SegmentIndex{
-						{
+					SegmentIndexes: map[int64]model.SegmentIndex{
+						segID: {
 							Segment: model.Segment{
 								SegmentID:   segID,
 								PartitionID: partID,
@@ -100,8 +100,8 @@ func TestDescribeSegmentsReqTask_Execute(t *testing.T) {
 					CollectionID: collID,
 					FieldID:      fieldID,
 					IndexID:      indexID,
-					SegmentIndexes: []model.SegmentIndex{
-						{
+					SegmentIndexes: map[int64]model.SegmentIndex{
+						segID: {
 							Segment: model.Segment{
 								SegmentID:   segID,
 								PartitionID: partID,
