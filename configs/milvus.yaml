@@ -306,8 +306,11 @@ common:
 
   # please adjust in embedded Milvus: local
   storageType: minio
-  meta:
-    storageType: etcd
+
+  # Default value: etcd
+  # Valid values: [etcd, mysql]
+  metastore:
+    type: etcd
 
   security:
     authorizationEnabled: false

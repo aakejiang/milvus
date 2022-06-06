@@ -81,9 +81,9 @@ type MetaTable struct {
 // TODO using factory once dependency of tnx and snap are removed
 func newCatalog(txn kv.TxnKV, snap kv.SnapShotKV) (metastore.Catalog, error) {
 	var catalog metastore.Catalog
-	if Params.CommonCfg.MetaStorageType == "etcd" {
+	if Params.CommonCfg.MetaStoreType == "etcd" {
 		catalog = &kvmetestore.Catalog{Txn: txn, Snapshot: snap}
-	} else if Params.CommonCfg.MetaStorageType == "database" {
+	} else if Params.CommonCfg.MetaStoreType == "mysql" {
 		conn, err := db.Open(&Params.DBCfg)
 		if err != nil {
 			log.Error("fail connecting to db", zap.Any("error", err))
@@ -91,7 +91,7 @@ func newCatalog(txn kv.TxnKV, snap kv.SnapShotKV) (metastore.Catalog, error) {
 		}
 		catalog = &table.TableCatalog{DB: conn}
 	} else {
-		return nil, errors.New("not supported meta store: " + Params.CommonCfg.MetaStorageType)
+		return nil, errors.New("not supported meta store: " + Params.CommonCfg.MetaStoreType)
 	}
 	return catalog, nil
 }

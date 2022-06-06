@@ -131,7 +131,7 @@ type commonConfig struct {
 	StorageType string
 	SimdType    string
 
-	MetaStorageType string
+	MetaStoreType string
 
 	AuthorizationEnabled bool
 }
@@ -170,7 +170,7 @@ func (p *commonConfig) init(base *BaseTable) {
 	p.initIndexSliceSize()
 	p.initGracefulTime()
 	p.initStorageType()
-	p.initMetaStorageType()
+	p.initMetaStoreType()
 
 	p.initEnableAuthorization()
 }
@@ -380,8 +380,8 @@ func (p *commonConfig) initStorageType() {
 	p.StorageType = p.Base.LoadWithDefault("common.storageType", "minio")
 }
 
-func (p *commonConfig) initMetaStorageType() {
-	p.MetaStorageType = p.Base.LoadWithDefault("common.meta.storageType", "etcd")
+func (p *commonConfig) initMetaStoreType() {
+	p.MetaStoreType = p.Base.LoadWithDefault("common.metastore.type", "etcd")
 }
 
 func (p *commonConfig) initEnableAuthorization() {
