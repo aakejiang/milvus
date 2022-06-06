@@ -6,6 +6,7 @@ import (
 	"github.com/milvus-io/milvus/internal/log"
 	"github.com/milvus-io/milvus/internal/metastore/model"
 	"github.com/milvus-io/milvus/internal/proto/commonpb"
+	"github.com/milvus-io/milvus/internal/util/funcutil"
 	"github.com/milvus-io/milvus/internal/util/typeutil"
 	"go.uber.org/zap"
 )
@@ -98,16 +99,16 @@ func ConvertFieldDBToModel(field *Field) *model.Field {
 	if field.Description != nil {
 		retDescription = *field.Description
 	}
-	var typeParams []*commonpb.KeyValuePair
+	var typeParams []commonpb.KeyValuePair
 	if field.TypeParams != nil {
-		err := json.Unmarshal([]byte(*field.TypeParams), typeParams)
+		err := json.Unmarshal([]byte(*field.TypeParams), &typeParams)
 		if err != nil {
 			log.Error("unmarshal TypeParams of field failed", zap.Error(err))
 		}
 	}
-	var indexParams []*commonpb.KeyValuePair
+	var indexParams []commonpb.KeyValuePair
 	if field.IndexParams != nil {
-		err := json.Unmarshal([]byte(*field.IndexParams), indexParams)
+		err := json.Unmarshal([]byte(*field.IndexParams), &indexParams)
 		if err != nil {
 			log.Error("unmarshal IndexParams of field failed", zap.Error(err))
 		}
@@ -118,8 +119,8 @@ func ConvertFieldDBToModel(field *Field) *model.Field {
 		IsPrimaryKey: field.IsPrimaryKey,
 		Description:  retDescription,
 		DataType:     field.DataType,
-		TypeParams:   typeParams,
-		IndexParams:  indexParams,
+		TypeParams:   funcutil.ConvertToKeyValuePairPointer(typeParams),
+		IndexParams:  funcutil.ConvertToKeyValuePairPointer(indexParams),
 		AutoID:       field.AutoID,
 	}
 }
@@ -133,8 +134,8 @@ func ConvertPartitionDBToModel(partiton *Partition) *model.Partition {
 }
 
 func ConvertIndexDBToModel(index *Index) *model.Index {
-	var indexParams []*commonpb.KeyValuePair
-	err := json.Unmarshal([]byte(index.IndexParams), indexParams)
+	var indexParams []commonpb.KeyValuePair
+	err := json.Unmarshal([]byte(index.IndexParams), &indexParams)
 	if err != nil {
 		log.Error("unmarshal IndexParams of field failed", zap.String("IndexParams", index.IndexParams), zap.Error(err))
 	}
@@ -143,7 +144,7 @@ func ConvertIndexDBToModel(index *Index) *model.Index {
 		FieldID:      index.FieldID,
 		IndexID:      index.IndexID,
 		IndexName:    index.IndexName,
-		IndexParams:  indexParams,
+		IndexParams:  funcutil.ConvertToKeyValuePairPointer(indexParams),
 	}
 }
 
@@ -166,8 +167,8 @@ func ConvertSegmentIndexDBToModel(segmentIndex *SegmentIndex) *model.SegmentInde
 }
 
 func ConvertToIndexModel(index *Index, segmentIndex *SegmentIndex) *model.Index {
-	var indexParams []*commonpb.KeyValuePair
-	err := json.Unmarshal([]byte(index.IndexParams), indexParams)
+	var indexParams []commonpb.KeyValuePair
+	err := json.Unmarshal([]byte(index.IndexParams), &indexParams)
 	if err != nil {
 		log.Error("unmarshal IndexParams of field failed", zap.Error(err))
 	}
@@ -177,7 +178,7 @@ func ConvertToIndexModel(index *Index, segmentIndex *SegmentIndex) *model.Index 
 		FieldID:      index.FieldID,
 		IndexID:      index.IndexID,
 		IndexName:    index.IndexName,
-		IndexParams:  indexParams,
+		IndexParams:  funcutil.ConvertToKeyValuePairPointer(indexParams),
 		SegmentIndexes: map[int64]model.SegmentIndex{
 			segIndex.SegmentID: *segIndex,
 		},
