@@ -218,7 +218,7 @@ func (w *watchDmChannelsTask) Execute(ctx context.Context) (err error) {
 		zap.Int64("collectionID", collectionID),
 		zap.Int64s("unFlushedSegmentIDs", unFlushedSegmentIDs),
 	)
-	err = w.node.loader.loadSegment(req, segmentTypeGrowing)
+	err = w.node.loader.LoadSegment(req, segmentTypeGrowing)
 	if err != nil {
 		log.Warn(err.Error())
 		return err
@@ -524,11 +524,24 @@ func (l *loadSegmentsTask) PreExecute(ctx context.Context) error {
 func (l *loadSegmentsTask) Execute(ctx context.Context) error {
 	// TODO: support db
 	log.Info("LoadSegmentTask Execute start", zap.Int64("msgID", l.req.Base.MsgID))
-	err := l.node.loader.loadSegment(l.req, segmentTypeSealed)
+	err := l.node.loader.LoadSegment(l.req, segmentTypeSealed)
 	if err != nil {
 		log.Warn(err.Error())
 		return err
 	}
+
+	// reload delete log from cp to latest position
+	for _, deltaPosition := range l.req.DeltaPositions {
+		err = l.node.loader.FromDmlCPLoadDelete(ctx, l.req.CollectionID, deltaPosition)
+		if err != nil {
+			for _, segment := range l.req.Infos {
+				l.node.metaReplica.removeSegment(segment.SegmentID, segmentTypeSealed)
+			}
+			log.Warn("LoadSegmentTask from delta check point load delete failed", zap.Int64("msgID", l.req.Base.MsgID), zap.Error(err))
+			return err
+		}
+	}
+
 	log.Info("LoadSegmentTask Execute done", zap.Int64("msgID", l.req.Base.MsgID))
 	return nil
 }

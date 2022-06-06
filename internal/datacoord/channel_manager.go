@@ -333,7 +333,16 @@ func (c *ChannelManager) AddNode(nodeID int64) error {
 		zap.Int64("registered node", nodeID),
 		zap.Array("updates", updates))
 
-	return c.updateWithTimer(updates, datapb.ChannelWatchState_ToRelease)
+	state := datapb.ChannelWatchState_ToRelease
+
+	for _, u := range updates {
+		if u.Type == Delete && u.NodeID == bufferID {
+			state = datapb.ChannelWatchState_ToWatch
+			break
+		}
+	}
+
+	return c.updateWithTimer(updates, state)
 }
 
 // DeleteNode deletes the node from the cluster.
@@ -673,6 +682,7 @@ func (c *ChannelManager) watchChannelStatesLoop(ctx context.Context) {
 
 	// REF MEP#7 watchInfo paths are orgnized as: [prefix]/channel/{node_id}/{channel_name}
 	watchPrefix := Params.DataCoordCfg.ChannelWatchSubPath
+	// TODO, this is risky, we'd better watch etcd with revision rather simply a path
 	etcdWatcher, timeoutWatcher := c.stateTimer.getWatchers(watchPrefix)
 
 	for {
@@ -684,16 +694,22 @@ func (c *ChannelManager) watchChannelStatesLoop(ctx context.Context) {
 			log.Debug("receive timeout acks from state watcher",
 				zap.Int64("nodeID", ackEvent.nodeID), zap.String("channel name", ackEvent.channelName))
 			c.processAck(ackEvent)
-		case event := <-etcdWatcher:
-			if event.Canceled {
-				log.Warn("watch channel canceled", zap.Error(event.Err()))
+		case event, ok := <-etcdWatcher:
+			if !ok {
+				log.Warn("datacoord failed to watch channel, return")
+				return
+			}
+
+			if err := event.Err(); err != nil {
+				log.Warn("datacoord watch channel hit error", zap.Error(event.Err()))
 				// https://github.com/etcd-io/etcd/issues/8980
 				if event.Err() == v3rpc.ErrCompacted {
 					go c.watchChannelStatesLoop(ctx)
 					return
 				}
 				// if watch loop return due to event canceled, the datacoord is not functional anymore
-				log.Panic("datacoord is not functional for event canceled")
+				log.Panic("datacoord is not functional for event canceled", zap.Error(err))
+				return
 			}
 
 			for _, evt := range event.Events {
@@ -801,6 +817,17 @@ func (c *ChannelManager) getChannelByNodeAndName(nodeID UniqueID, channelName st
 		}
 	}
 	return ret
+}
+
+func (c *ChannelManager) getNodeIDByChannelName(chName string) (bool, UniqueID) {
+	for _, nodeChannel := range c.GetChannels() {
+		for _, ch := range nodeChannel.Channels {
+			if ch.Name == chName {
+				return true, nodeChannel.NodeID
+			}
+		}
+	}
+	return false, 0
 }
 
 func (c *ChannelManager) isMarkedDrop(channelName string) bool {

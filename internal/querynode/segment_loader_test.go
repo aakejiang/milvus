@@ -23,9 +23,6 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/mock"
-
 	"github.com/milvus-io/milvus/internal/common"
 	"github.com/milvus-io/milvus/internal/mq/msgstream"
 	"github.com/milvus-io/milvus/internal/proto/commonpb"
@@ -34,6 +31,8 @@ import (
 	"github.com/milvus-io/milvus/internal/proto/schemapb"
 	"github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/internal/util/funcutil"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 )
 
 func TestSegmentLoader_loadSegment(t *testing.T) {
@@ -41,7 +40,7 @@ func TestSegmentLoader_loadSegment(t *testing.T) {
 	defer cancel()
 
 	schema := genTestCollectionSchema()
-	fieldBinlog, err := saveBinLog(ctx, defaultCollectionID, defaultPartitionID, defaultSegmentID, defaultMsgLength, schema)
+	fieldBinlog, statsLog, err := saveBinLog(ctx, defaultCollectionID, defaultPartitionID, defaultSegmentID, defaultMsgLength, schema)
 	assert.NoError(t, err)
 
 	t.Run("test load segment", func(t *testing.T) {
@@ -65,11 +64,12 @@ func TestSegmentLoader_loadSegment(t *testing.T) {
 					PartitionID:  defaultPartitionID,
 					CollectionID: defaultCollectionID,
 					BinlogPaths:  fieldBinlog,
+					Statslogs:    statsLog,
 				},
 			},
 		}
 
-		err = loader.loadSegment(req, segmentTypeSealed)
+		err = loader.LoadSegment(req, segmentTypeSealed)
 		assert.NoError(t, err)
 	})
 
@@ -100,7 +100,7 @@ func TestSegmentLoader_loadSegment(t *testing.T) {
 			},
 		}
 
-		err = loader.loadSegment(req, segmentTypeSealed)
+		err = loader.LoadSegment(req, segmentTypeSealed)
 		assert.Error(t, err)
 	})
 
@@ -113,7 +113,7 @@ func TestSegmentLoader_loadSegment(t *testing.T) {
 
 		req := &querypb.LoadSegmentsRequest{}
 
-		err = loader.loadSegment(req, segmentTypeSealed)
+		err = loader.LoadSegment(req, segmentTypeSealed)
 		assert.Error(t, err)
 	})
 }
@@ -178,10 +178,10 @@ func TestSegmentLoader_loadSegmentFieldsData(t *testing.T) {
 			segmentTypeSealed)
 		assert.Nil(t, err)
 
-		binlog, err := saveBinLog(ctx, defaultCollectionID, defaultPartitionID, defaultSegmentID, defaultMsgLength, schema)
+		binlog, _, err := saveBinLog(ctx, defaultCollectionID, defaultPartitionID, defaultSegmentID, defaultMsgLength, schema)
 		assert.NoError(t, err)
 
-		err = loader.loadFiledBinlogData(segment, binlog)
+		err = loader.loadSealedSegmentFields(segment, binlog)
 		assert.NoError(t, err)
 	}
 
@@ -234,7 +234,7 @@ func TestSegmentLoader_invalid(t *testing.T) {
 			},
 		}
 
-		err = loader.loadSegment(req, segmentTypeSealed)
+		err = loader.LoadSegment(req, segmentTypeSealed)
 		assert.Error(t, err)
 	})
 
@@ -272,7 +272,7 @@ func TestSegmentLoader_invalid(t *testing.T) {
 				},
 			},
 		}
-		err = loader.loadSegment(req, segmentTypeSealed)
+		err = loader.LoadSegment(req, segmentTypeSealed)
 		assert.Error(t, err)
 	})
 
@@ -297,7 +297,7 @@ func TestSegmentLoader_invalid(t *testing.T) {
 			},
 		}
 
-		err = loader.loadSegment(req, commonpb.SegmentState_Dropped)
+		err = loader.LoadSegment(req, commonpb.SegmentState_Dropped)
 		assert.Error(t, err)
 	})
 }
@@ -383,7 +383,7 @@ func TestSegmentLoader_testLoadGrowingAndSealed(t *testing.T) {
 	defer cancel()
 
 	schema := genTestCollectionSchema()
-	fieldBinlog, err := saveBinLog(ctx, defaultCollectionID, defaultPartitionID, defaultSegmentID, defaultMsgLength, schema)
+	fieldBinlog, statsLog, err := saveBinLog(ctx, defaultCollectionID, defaultPartitionID, defaultSegmentID, defaultMsgLength, schema)
 	assert.NoError(t, err)
 
 	deltaLogs, err := saveDeltaLog(defaultCollectionID, defaultPartitionID, defaultSegmentID)
@@ -410,11 +410,12 @@ func TestSegmentLoader_testLoadGrowingAndSealed(t *testing.T) {
 					PartitionID:  defaultPartitionID,
 					CollectionID: defaultCollectionID,
 					BinlogPaths:  fieldBinlog,
+					Statslogs:    statsLog,
 				},
 			},
 		}
 
-		err = loader.loadSegment(req1, segmentTypeSealed)
+		err = loader.LoadSegment(req1, segmentTypeSealed)
 		assert.NoError(t, err)
 
 		segment1, err := loader.metaReplica.getSegmentByID(segmentID1, segmentTypeSealed)
@@ -440,7 +441,7 @@ func TestSegmentLoader_testLoadGrowingAndSealed(t *testing.T) {
 			},
 		}
 
-		err = loader.loadSegment(req2, segmentTypeSealed)
+		err = loader.LoadSegment(req2, segmentTypeSealed)
 		assert.NoError(t, err)
 
 		segment2, err := loader.metaReplica.getSegmentByID(segmentID2, segmentTypeSealed)
@@ -474,7 +475,7 @@ func TestSegmentLoader_testLoadGrowingAndSealed(t *testing.T) {
 			},
 		}
 
-		err = loader.loadSegment(req1, segmentTypeGrowing)
+		err = loader.LoadSegment(req1, segmentTypeGrowing)
 		assert.NoError(t, err)
 
 		segment1, err := loader.metaReplica.getSegmentByID(segmentID1, segmentTypeGrowing)
@@ -500,7 +501,7 @@ func TestSegmentLoader_testLoadGrowingAndSealed(t *testing.T) {
 			},
 		}
 
-		err = loader.loadSegment(req2, segmentTypeGrowing)
+		err = loader.LoadSegment(req2, segmentTypeGrowing)
 		assert.NoError(t, err)
 
 		segment2, err := loader.metaReplica.getSegmentByID(segmentID2, segmentTypeGrowing)
@@ -517,7 +518,7 @@ func TestSegmentLoader_testLoadSealedSegmentWithIndex(t *testing.T) {
 	schema := genTestCollectionSchema()
 
 	// generate insert binlog
-	fieldBinlog, err := saveBinLog(ctx, defaultCollectionID, defaultPartitionID, defaultSegmentID, defaultMsgLength, schema)
+	fieldBinlog, statsLog, err := saveBinLog(ctx, defaultCollectionID, defaultPartitionID, defaultSegmentID, defaultMsgLength, schema)
 	assert.NoError(t, err)
 
 	segmentID := UniqueID(100)
@@ -555,11 +556,12 @@ func TestSegmentLoader_testLoadSealedSegmentWithIndex(t *testing.T) {
 				CollectionID: defaultCollectionID,
 				BinlogPaths:  fieldBinlog,
 				IndexInfos:   []*querypb.FieldIndexInfo{indexInfo},
+				Statslogs:    statsLog,
 			},
 		},
 	}
 
-	err = loader.loadSegment(req, segmentTypeSealed)
+	err = loader.LoadSegment(req, segmentTypeSealed)
 	assert.NoError(t, err)
 
 	segment, err := node.metaReplica.getSegmentByID(segmentID, segmentTypeSealed)

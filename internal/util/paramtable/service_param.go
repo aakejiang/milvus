@@ -384,6 +384,8 @@ type MinioConfig struct {
 	UseSSL          bool
 	BucketName      string
 	RootPath        string
+	UseIAM          bool
+	IAMEndpoint     string
 }
 
 func (p *MinioConfig) init(base *BaseTable) {
@@ -395,6 +397,8 @@ func (p *MinioConfig) init(base *BaseTable) {
 	p.initUseSSL()
 	p.initBucketName()
 	p.initRootPath()
+	p.initUseIAM()
+	p.initIAMEndpoint()
 }
 
 func (p *MinioConfig) initAddress() {
@@ -443,4 +447,14 @@ func (p *MinioConfig) initRootPath() {
 		panic(err)
 	}
 	p.RootPath = rootPath
+}
+
+func (p *MinioConfig) initUseIAM() {
+	useIAM := p.Base.LoadWithDefault("minio.useIAM", DefaultMinioUseIAM)
+	p.UseIAM, _ = strconv.ParseBool(useIAM)
+}
+
+func (p *MinioConfig) initIAMEndpoint() {
+	iamEndpoint := p.Base.LoadWithDefault("minio.iamEndpoint", DefaultMinioIAMEndpoint)
+	p.IAMEndpoint = iamEndpoint
 }

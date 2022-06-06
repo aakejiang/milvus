@@ -102,7 +102,6 @@ var Params paramtable.ComponentParam
 type DataNode struct {
 	ctx    context.Context
 	cancel context.CancelFunc
-	NodeID UniqueID
 	Role   string
 	State  atomic.Value // internalpb.StateCode_Initializing
 
@@ -228,6 +227,7 @@ func (node *DataNode) Init() error {
 func (node *DataNode) StartWatchChannels(ctx context.Context) {
 	defer logutil.LogPanic()
 	// REF MEP#7 watch path should be [prefix]/channel/{node_id}/{channel_name}
+	// TODO, this is risky, we'd better watch etcd with revision rather simply a path
 	watchPrefix := path.Join(Params.DataNodeCfg.ChannelWatchSubPath, fmt.Sprintf("%d", Params.DataNodeCfg.GetNodeID()))
 	evtChan := node.watchKv.WatchWithPrefix(watchPrefix)
 	// after watch, first check all exists nodes first
@@ -241,20 +241,21 @@ func (node *DataNode) StartWatchChannels(ctx context.Context) {
 		case <-ctx.Done():
 			log.Info("watch etcd loop quit")
 			return
-		case event := <-evtChan:
-			if event.Canceled { // event canceled
-				log.Warn("watch channel canceled", zap.Error(event.Err()))
+		case event, ok := <-evtChan:
+			if !ok {
+				log.Warn("datanode failed to watch channel, return")
+				return
+			}
+
+			if err := event.Err(); err != nil {
+				log.Warn("datanode watch channel canceled", zap.Error(event.Err()))
 				// https://github.com/etcd-io/etcd/issues/8980
 				if event.Err() == v3rpc.ErrCompacted {
 					go node.StartWatchChannels(ctx)
 					return
 				}
 				// if watch loop return due to event canceled, the datanode is not functional anymore
-				// stop the datanode and wait for restart
-				err := node.Stop()
-				if err != nil {
-					log.Warn("node stop failed", zap.Error(err))
-				}
+				log.Panic("datanode is not functional for event canceled", zap.Error(err))
 				return
 			}
 			for _, evt := range event.Events {
@@ -633,7 +634,7 @@ func (node *DataNode) FlushSegments(ctx context.Context, req *datapb.FlushSegmen
 // It returns a list of segments to be sent.
 func (node *DataNode) ResendSegmentStats(ctx context.Context, req *datapb.ResendSegmentStatsRequest) (*datapb.ResendSegmentStatsResponse, error) {
 	log.Info("start resending segment stats, if any",
-		zap.Int64("DataNode ID", node.NodeID))
+		zap.Int64("DataNode ID", Params.DataNodeCfg.GetNodeID()))
 	segResent := node.flowgraphManager.resendTT()
 	log.Info("found segment(s) with stats to resend",
 		zap.Int64s("segment IDs", segResent))
@@ -811,7 +812,7 @@ func (node *DataNode) Import(ctx context.Context, req *datapb.ImportTaskRequest)
 			ErrorCode: commonpb.ErrorCode_Success,
 		},
 		TaskId:     req.GetImportTask().TaskId,
-		DatanodeId: node.NodeID,
+		DatanodeId: Params.DataNodeCfg.GetNodeID(),
 		State:      commonpb.ImportState_ImportStarted,
 		Segments:   make([]int64, 0),
 		AutoIds:    make([]int64, 0),
@@ -843,7 +844,7 @@ func (node *DataNode) Import(ctx context.Context, req *datapb.ImportTaskRequest)
 			MsgType:   commonpb.MsgType_RequestTSO,
 			MsgID:     0,
 			Timestamp: 0,
-			SourceID:  node.NodeID,
+			SourceID:  Params.DataNodeCfg.GetNodeID(),
 		},
 		Count: 1,
 	})
@@ -865,7 +866,7 @@ func (node *DataNode) Import(ctx context.Context, req *datapb.ImportTaskRequest)
 	ts := rep.GetTimestamp()
 
 	metaService := newMetaService(node.rootCoord, req.GetImportTask().GetCollectionId())
-	schema, err := metaService.getCollectionSchema(ctx, req.GetImportTask().GetCollectionId(), 0)
+	colInfo, err := metaService.getCollectionInfo(ctx, req.GetImportTask().GetCollectionId(), 0)
 	if err != nil {
 		importResult.State = commonpb.ImportState_ImportFailed
 		importResult.Infos = append(importResult.Infos, &commonpb.KeyValuePair{Key: "failed_reason", Value: err.Error()})
@@ -882,8 +883,8 @@ func (node *DataNode) Import(ctx context.Context, req *datapb.ImportTaskRequest)
 	defer idAllocator.Close()
 
 	segmentSize := int64(Params.DataCoordCfg.SegmentMaxSize) * 1024 * 1024
-	importWrapper := importutil.NewImportWrapper(ctx, schema, 2, segmentSize, idAllocator, node.chunkManager,
-		importFlushReqFunc(node, req, importResult, schema, ts), importResult, reportFunc)
+	importWrapper := importutil.NewImportWrapper(ctx, colInfo.GetSchema(), colInfo.GetShardsNum(), segmentSize, idAllocator, node.chunkManager,
+		importFlushReqFunc(node, req, importResult, colInfo.GetSchema(), ts), importResult, reportFunc)
 	err = importWrapper.Import(req.GetImportTask().GetFiles(), req.GetImportTask().GetRowBased(), false)
 	if err != nil {
 		importResult.State = commonpb.ImportState_ImportFailed
@@ -899,6 +900,54 @@ func (node *DataNode) Import(ctx context.Context, req *datapb.ImportTaskRequest)
 		ErrorCode: commonpb.ErrorCode_Success,
 	}
 	return resp, nil
+}
+
+// AddSegment adds the segment to the current DataNode.
+func (node *DataNode) AddSegment(ctx context.Context, req *datapb.AddSegmentRequest) (*commonpb.Status, error) {
+	log.Info("adding segment to DataNode flow graph",
+		zap.Int64("segment ID", req.GetSegmentId()),
+		zap.Int64("collection ID", req.GetCollectionId()),
+		zap.Int64("partition ID", req.GetPartitionId()),
+		zap.String("channel name", req.GetChannelName()),
+		zap.Int64("# of rows", req.GetRowNum()))
+	// Fetch the flow graph on the given v-channel.
+	ds, ok := node.flowgraphManager.getFlowgraphService(req.GetChannelName())
+	if !ok {
+		log.Error("channel not found in current DataNode",
+			zap.String("channel name", req.GetChannelName()),
+			zap.Int64("node ID", Params.DataNodeCfg.GetNodeID()))
+		return &commonpb.Status{
+			// TODO: Add specific error code.
+			ErrorCode: commonpb.ErrorCode_UnexpectedError,
+		}, nil
+	}
+	// Add the new segment to the replica.
+	if !ds.replica.hasSegment(req.GetSegmentId(), true) {
+		log.Info("add a new segment to replica")
+		err := ds.replica.addNewSegment(req.GetSegmentId(),
+			req.GetCollectionId(),
+			req.GetPartitionId(),
+			req.GetChannelName(),
+			&internalpb.MsgPosition{
+				ChannelName: req.GetChannelName(),
+			},
+			&internalpb.MsgPosition{
+				ChannelName: req.GetChannelName(),
+			})
+		if err != nil {
+			log.Error("failed to add segment to flow graph",
+				zap.Error(err))
+			return &commonpb.Status{
+				// TODO: Add specific error code.
+				ErrorCode: commonpb.ErrorCode_UnexpectedError,
+			}, nil
+		}
+	}
+	// Update # of rows of the given segment.
+	ds.replica.updateStatistics(req.GetSegmentId(), req.GetRowNum())
+	return &commonpb.Status{
+		ErrorCode: commonpb.ErrorCode_Success,
+	}, nil
 }
 
 func importFlushReqFunc(node *DataNode, req *datapb.ImportTaskRequest, res *rootcoordpb.ImportResult, schema *schemapb.CollectionSchema, ts Timestamp) importutil.ImportFlushFunc {
@@ -1053,39 +1102,20 @@ func importFlushReqFunc(node *DataNode, req *datapb.ImportTaskRequest, res *root
 			fieldStats = append(fieldStats, &datapb.FieldBinlog{FieldID: k, Binlogs: []*datapb.Binlog{v}})
 		}
 
-		ds, ok := node.flowgraphManager.getFlowgraphService(segReqs[0].GetChannelName())
-		if !ok {
-			log.Warn("channel not found in current dataNode",
-				zap.String("channel name", segReqs[0].GetChannelName()),
-				zap.Int64("node ID", node.NodeID))
-			return errors.New("channel " + segReqs[0].GetChannelName() + " not found in current dataNode")
-		}
+		log.Info("now adding segment to the correct DataNode flow graph")
+		// Ask DataCoord to add segment to the corresponding DataNode flow graph.
+		node.dataCoord.AddSegment(context.Background(), &datapb.AddSegmentRequest{
+			Base: &commonpb.MsgBase{
+				SourceID: Params.DataNodeCfg.GetNodeID(),
+			},
+			SegmentId:    segmentID,
+			ChannelName:  segReqs[0].GetChannelName(),
+			CollectionId: req.GetImportTask().GetCollectionId(),
+			PartitionId:  req.GetImportTask().GetPartitionId(),
+			RowNum:       int64(rowNum),
+		})
 
-		// Update flow graph replica segment info.
-		// TODO: Duplicate code. Add wrapper function.
-		if !ds.replica.hasSegment(segmentID, true) {
-			err = ds.replica.addNewSegment(segmentID,
-				req.GetImportTask().GetCollectionId(),
-				req.GetImportTask().GetPartitionId(),
-				segReqs[0].GetChannelName(),
-				&internalpb.MsgPosition{
-					ChannelName: segReqs[0].GetChannelName(),
-				},
-				&internalpb.MsgPosition{
-					ChannelName: segReqs[0].GetChannelName(),
-				})
-			if err != nil {
-				log.Error("failed to add segment",
-					zap.Int64("segment ID", segmentID),
-					zap.Int64("collection ID", req.GetImportTask().GetCollectionId()),
-					zap.Int64("partition ID", req.GetImportTask().GetPartitionId()),
-					zap.String("channel mame", segReqs[0].GetChannelName()),
-					zap.Error(err))
-			}
-		}
-		ds.replica.updateStatistics(segmentID, int64(rowNum))
-
-		req := &datapb.SaveBinlogPathsRequest{
+		binlogReq := &datapb.SaveBinlogPathsRequest{
 			Base: &commonpb.MsgBase{
 				MsgType:   0, //TODO msg type
 				MsgID:     0, //TODO msg id
@@ -1093,14 +1123,14 @@ func importFlushReqFunc(node *DataNode, req *datapb.ImportTaskRequest, res *root
 				SourceID:  Params.DataNodeCfg.GetNodeID(),
 			},
 			SegmentID:           segmentID,
-			CollectionID:        req.ImportTask.GetCollectionId(),
+			CollectionID:        req.GetImportTask().GetCollectionId(),
 			Field2BinlogPaths:   fieldInsert,
 			Field2StatslogPaths: fieldStats,
 			Importing:           true,
 		}
 
 		err = retry.Do(context.Background(), func() error {
-			rsp, err := node.dataCoord.SaveBinlogPaths(context.Background(), req)
+			rsp, err := node.dataCoord.SaveBinlogPaths(context.Background(), binlogReq)
 			// should be network issue, return error and retry
 			if err != nil {
 				return fmt.Errorf(err.Error())

@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"github.com/milvus-io/milvus/internal/util/typeutil"
+	"github.com/minio/minio-go/v7"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -2525,7 +2526,7 @@ func TestDataCoordServer_SetSegmentState(t *testing.T) {
 	})
 }
 
-func TestImport(t *testing.T) {
+func TestDataCoord_Import(t *testing.T) {
 	t.Run("normal case", func(t *testing.T) {
 		svr := newTestServer(t, nil)
 		defer closeTestServer(t, svr)
@@ -2645,6 +2646,57 @@ func TestImport(t *testing.T) {
 			SegmentIDs: []UniqueID{1, 2},
 			NodeID:     UniqueID(1),
 		})
+		assert.NoError(t, err)
+		assert.Equal(t, commonpb.ErrorCode_UnexpectedError, status.GetErrorCode())
+	})
+}
+
+func TestDataCoord_AddSegment(t *testing.T) {
+	t.Run("test add segment", func(t *testing.T) {
+		svr := newTestServer(t, nil)
+		defer closeTestServer(t, svr)
+
+		err := svr.channelManager.AddNode(110)
+		assert.Nil(t, err)
+		err = svr.channelManager.Watch(&channel{"ch1", 100})
+		assert.Nil(t, err)
+
+		status, err := svr.AddSegment(context.TODO(), &datapb.AddSegmentRequest{
+			SegmentId:    100,
+			ChannelName:  "ch1",
+			CollectionId: 100,
+			PartitionId:  100,
+			RowNum:       int64(1),
+		})
+		assert.NoError(t, err)
+		assert.Equal(t, commonpb.ErrorCode_Success, status.GetErrorCode())
+	})
+
+	t.Run("test add segment w/ bad channel name", func(t *testing.T) {
+		svr := newTestServer(t, nil)
+		defer closeTestServer(t, svr)
+
+		err := svr.channelManager.AddNode(110)
+		assert.Nil(t, err)
+		err = svr.channelManager.Watch(&channel{"ch1", 100})
+		assert.Nil(t, err)
+
+		status, err := svr.AddSegment(context.TODO(), &datapb.AddSegmentRequest{
+			SegmentId:    100,
+			ChannelName:  "non-channel",
+			CollectionId: 100,
+			PartitionId:  100,
+			RowNum:       int64(1),
+		})
+		assert.NoError(t, err)
+		assert.Equal(t, commonpb.ErrorCode_UnexpectedError, status.GetErrorCode())
+	})
+
+	t.Run("test add segment w/ closed server", func(t *testing.T) {
+		svr := newTestServer(t, nil)
+		closeTestServer(t, svr)
+
+		status, err := svr.AddSegment(context.TODO(), &datapb.AddSegmentRequest{})
 		assert.NoError(t, err)
 		assert.Equal(t, commonpb.ErrorCode_UnexpectedError, status.GetErrorCode())
 	})
@@ -2821,4 +2873,35 @@ func Test_initServiceDiscovery(t *testing.T) {
 	}
 
 	closeTestServer(t, server)
+}
+
+func Test_initGarbageCollection(t *testing.T) {
+	server := newTestServer2(t, nil)
+	Params.DataCoordCfg.EnableGarbageCollection = true
+
+	t.Run("err_minio_bad_address", func(t *testing.T) {
+		Params.MinioCfg.Address = "host:9000:bad"
+		err := server.initGarbageCollection()
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to create minio client")
+	})
+
+	// mock CheckBucketFn
+	getCheckBucketFnBak := getCheckBucketFn
+	getCheckBucketFn = func(cli *minio.Client) func() error {
+		return func() error { return nil }
+	}
+	defer func() {
+		getCheckBucketFn = getCheckBucketFnBak
+	}()
+	Params.MinioCfg.Address = "minio:9000"
+	t.Run("ok", func(t *testing.T) {
+		err := server.initGarbageCollection()
+		assert.NoError(t, err)
+	})
+	t.Run("iam_ok", func(t *testing.T) {
+		Params.MinioCfg.UseIAM = true
+		err := server.initGarbageCollection()
+		assert.NoError(t, err)
+	})
 }
