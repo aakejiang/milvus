@@ -22,12 +22,10 @@ type TableCatalog struct {
 const sqlJoin = `select
 collections.*,
 field_schemas.field_id, field_schemas.field_name, field_schemas.is_primary_key, field_schemas.description, field_schemas.data_type, field_schemas.type_params, field_schemas.auto_id,
-partitions.partition_id, partitions.partition_name, partitions.partition_created_timestamp,
-IFNULL(indexes.field_id, 0), IFNULL(indexes.index_id, 0), IFNULL(indexes.index_name, ""), IFNULL(indexes.index_params, "")
+partitions.partition_id, partitions.partition_name, partitions.partition_created_timestamp
 from collections
 left join field_schemas on collections.collection_id = field_schemas.collection_id and collections.ts = field_schemas.ts and field_schemas.is_deleted=false
-left join partitions on collections.collection_id = partitions.collection_id and collections.ts = partitions.ts and partitions.is_deleted=false
-left join indexes on collections.collection_id = indexes.collection_id and indexes.is_deleted=false`
+left join partitions on collections.collection_id = partitions.collection_id and collections.ts = partitions.ts and partitions.is_deleted=false`
 
 func (tc *TableCatalog) CreateCollection(ctx context.Context, collection *model.Collection, ts typeutil.Timestamp) error {
 	return WithTransaction(tc.DB, func(tx Transaction) error {
@@ -132,7 +130,6 @@ func (tc *TableCatalog) GetCollectionByID(ctx context.Context, collectionID type
 		Collection
 		Partition
 		Field
-		Index
 	}
 	sqlStr := sqlJoin + " where collections.is_deleted=false and collections.collection_id=?"
 	var err error
@@ -147,9 +144,11 @@ func (tc *TableCatalog) GetCollectionByID(ctx context.Context, collectionID type
 		return nil, err
 	}
 
+	indexMap, _ := tc.listIndexesByCollectionID(collectionID) // populate index info
 	var colls []*model.Collection
 	for _, record := range result {
-		c := ConvertCollectionDBToModel(&record.Collection, &record.Partition, &record.Field, &record.Index)
+		index, _ := indexMap[collectionID]
+		c := ConvertCollectionDBToModel(&record.Collection, &record.Partition, &record.Field, &index)
 		colls = append(colls, c)
 	}
 	collMap := ConvertCollectionsToIDMap(colls)
@@ -191,7 +190,6 @@ func (tc *TableCatalog) ListCollections(ctx context.Context, ts typeutil.Timesta
 		Collection
 		Partition
 		Field
-		Index
 	}
 	sqlStr := sqlJoin + " where collections.is_deleted=false"
 	var err error
@@ -206,9 +204,12 @@ func (tc *TableCatalog) ListCollections(ctx context.Context, ts typeutil.Timesta
 		return nil, err
 	}
 
+	indexMap, _ := tc.listIndexesByCollectionID(-1) // populate index info
 	var colls []*model.Collection
 	for _, record := range result {
-		c := ConvertCollectionDBToModel(&record.Collection, &record.Partition, &record.Field, &record.Index)
+		coll := record.Collection
+		index, _ := indexMap[coll.CollectionID]
+		c := ConvertCollectionDBToModel(&coll, &record.Partition, &record.Field, &index)
 		colls = append(colls, c)
 	}
 	return ConvertCollectionsToNameMap(colls), nil
@@ -489,6 +490,34 @@ func (tc *TableCatalog) DropIndex(ctx context.Context, collectionInfo *model.Col
 	})
 }
 
+func (tc *TableCatalog) listIndexesByCollectionID(collID typeutil.UniqueID) (map[int64]Index, error) {
+	var resultMap map[int64]Index
+
+	var indexes []Index
+	sqlStr := `select * from indexes where is_deleted=false`
+	args := []interface{}{}
+	if collID > 0 {
+		sqlStr = sqlStr + " and collection_id=?"
+		args = append(args, collID)
+	}
+	//if ts > 0 {
+	//	sqlStr = sqlStr + " and ts<=?"
+	//	args = append(args, ts)
+	//}
+	err := tc.DB.Select(&indexes, sqlStr, args...)
+	if err != nil {
+		log.Error("list indexes by collectionID failed", zap.Int64("collID", collID), zap.Error(err))
+		return resultMap, err
+	}
+
+	resultMap = make(map[int64]Index)
+	for _, idx := range indexes {
+		resultMap[idx.CollectionID] = idx
+	}
+
+	return resultMap, nil
+}
+
 func (tc *TableCatalog) ListIndexes(ctx context.Context) ([]*model.Index, error) {
 	sqlStr := `select
 		segment_indexes.*,
@@ -678,7 +707,7 @@ func (tc *TableCatalog) LoadDdOperation(ctx context.Context) (model.DdOperation,
 	var ddOp DdOperation
 	sqlStr := "select * from dd_msg_send order by updated_at desc limit 1"
 	err := tc.DB.Get(&ddOp, sqlStr)
-	if err != sql.ErrNoRows { // err.Error() != "sql: no rows in result set"
+	if err != nil && err != sql.ErrNoRows { // err.Error() != "sql: no rows in result set"
 		log.Error("get dd-operation failed", zap.Error(err))
 		return model.DdOperation{}, err
 	}

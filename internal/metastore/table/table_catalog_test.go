@@ -837,6 +837,44 @@ func TestDropIndex_RollbackOnFailure2(t *testing.T) {
 	}
 }
 
+func TestListIndexesByCollectionID(t *testing.T) {
+	mock, tc := getMock(t)
+	defer tc.DB.Close()
+
+	sqlSelectSql := "select"
+
+	// mock select failure
+	mock.ExpectQuery(sqlSelectSql).WillReturnError(errors.New("select error"))
+	_, err := tc.listIndexesByCollectionID(collID)
+	if !strings.Contains(err.Error(), "select error") {
+		t.Fatalf("unexpected error:%s", err)
+	}
+
+	// mock select normal
+	rows := sqlmock.NewRows(
+		[]string{"id", "field_id", "collection_id", "index_id", "index_name", "index_params"},
+	).AddRow([]driver.Value{1, fieldID, collID, indexID, indexName, ""}...)
+	mock.ExpectQuery(sqlSelectSql).WillReturnRows(rows)
+	res, err := tc.listIndexesByCollectionID(collID)
+	if err != nil {
+		t.Fatalf("unexpected error:%s", err)
+	}
+
+	idx := res[collID]
+	if idx.CollectionID != collID {
+		t.Fatalf("unexpected collection_id:%d", idx.CollectionID)
+	}
+	if idx.FieldID != fieldID {
+		t.Fatalf("unexpected field_id:%d", idx.FieldID)
+	}
+	if idx.IndexID != indexID {
+		t.Fatalf("unexpected index_id:%d", idx.IndexID)
+	}
+	if idx.IndexName != indexName {
+		t.Fatalf("unexpected index_name:%s", idx.IndexName)
+	}
+}
+
 func TestListIndexes(t *testing.T) {
 	mock, tc := getMock(t)
 	defer tc.DB.Close()
