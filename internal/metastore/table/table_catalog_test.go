@@ -769,6 +769,61 @@ func TestCreateIndex_RollbackOnFailure2(t *testing.T) {
 	}
 }
 
+func TestAlterIndex(t *testing.T) {
+	mock, tc := getMock(t)
+	defer tc.DB.Close()
+
+	oldIndex := &model.Index{
+		FieldID:   fieldID,
+		IndexID:   indexID,
+		IndexName: indexName,
+	}
+	oldIndex.SegmentIndexes = map[int64]model.SegmentIndex{
+		segID: {
+			Segment: model.Segment{
+				SegmentID: segID,
+			},
+			EnableIndex: false,
+		},
+	}
+
+	// new index
+	newIndex := &model.Index{
+		FieldID:   fieldID,
+		IndexID:   indexID,
+		IndexName: indexName,
+	}
+	newIndex.SegmentIndexes = map[int64]model.SegmentIndex{
+		segID: {
+			Segment: model.Segment{
+				SegmentID: segID,
+			},
+			EnableIndex: true,
+			BuildID:     buildID,
+		},
+	}
+
+	// mock update failure
+	mock.ExpectBegin()
+	mock.ExpectExec("update indexes").WillReturnError(fmt.Errorf("update indexes error"))
+	//mock.ExpectExec("update segment_indexes").WillReturnError(fmt.Errorf("update segment_indexes error"))
+	mock.ExpectRollback()
+	err := tc.AlterIndex(context.TODO(), oldIndex, newIndex)
+	if !strings.Contains(err.Error(), "update indexes error") {
+		t.Fatalf("unexpected error:%s", err)
+	}
+
+	// now we execute our request
+	mock.ExpectBegin()
+	mock.ExpectExec("update indexes").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("update segment_indexes").WillReturnResult(sqlmock.NewResult(0, 3))
+	mock.ExpectCommit()
+	err = tc.AlterIndex(context.TODO(), oldIndex, newIndex)
+	if err != nil {
+		t.Fatalf("unexpected error:%s", err)
+	}
+}
+
 func TestDropIndex(t *testing.T) {
 	mock, tc := getMock(t)
 	defer tc.DB.Close()

@@ -457,7 +457,38 @@ func (tc *TableCatalog) CreateIndex(ctx context.Context, col *model.Collection, 
 }
 
 func (tc *TableCatalog) AlterIndex(ctx context.Context, oldIndex *model.Index, newIndex *model.Index) error {
-	return nil
+	return WithTransaction(tc.DB, func(tx Transaction) error {
+		// sql 1
+		sqlStr1 := "update indexes set index_name=?, index_params=? where index_id=?"
+		indexParamsBytes, err := json.Marshal(newIndex.IndexParams)
+		if err != nil {
+			log.Error("marshal IndexParams of index failed", zap.Error(err))
+		}
+		indexParamsStr := string(indexParamsBytes)
+		_, err = tx.Exec(sqlStr1, newIndex.IndexName, indexParamsStr, oldIndex.IndexID)
+		if err != nil {
+			log.Error("update indexes failed", zap.Error(err))
+			return err
+		}
+
+		// sql 2
+		sqlStr2 := "update segment_indexes set build_id=?, enable_index=?, index_file_paths=?, index_size=? where collection_id=? and segment_id=? and field_id=? and index_id=?"
+		for _, segIndex := range newIndex.SegmentIndexes {
+			indexFilePaths, err := json.Marshal(segIndex.IndexFilePaths)
+			if err != nil {
+				log.Error("marshal alias failed", zap.Error(err))
+				continue
+			}
+			indexFilePathsStr := string(indexFilePaths)
+			_, err = tx.Exec(sqlStr2, segIndex.BuildID, segIndex.EnableIndex, indexFilePathsStr, segIndex.IndexSize, oldIndex.CollectionID, segIndex.SegmentID, oldIndex.FieldID, oldIndex.IndexID)
+			if err != nil {
+				log.Error("update segment_indexes failed", zap.Error(err))
+				return err
+			}
+		}
+
+		return nil
+	})
 }
 
 func (tc *TableCatalog) DropIndex(ctx context.Context, collectionInfo *model.Collection, dropIdxID typeutil.UniqueID, ts typeutil.Timestamp) error {
