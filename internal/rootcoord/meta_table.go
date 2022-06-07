@@ -34,6 +34,7 @@ import (
 	"github.com/milvus-io/milvus/internal/proto/internalpb"
 	"github.com/milvus-io/milvus/internal/proto/milvuspb"
 	"github.com/milvus-io/milvus/internal/proto/schemapb"
+	"github.com/milvus-io/milvus/internal/util"
 	"github.com/milvus-io/milvus/internal/util/typeutil"
 	"go.uber.org/zap"
 )
@@ -81,9 +82,9 @@ type MetaTable struct {
 // TODO using factory once dependency of tnx and snap are removed
 func newCatalog(txn kv.TxnKV, snap kv.SnapShotKV) (metastore.Catalog, error) {
 	var catalog metastore.Catalog
-	if Params.CommonCfg.MetaStoreType == "etcd" {
+	if Params.CommonCfg.MetaStoreType == util.MetaStoreTypeEtcd {
 		catalog = &kvmetestore.Catalog{Txn: txn, Snapshot: snap}
-	} else if Params.CommonCfg.MetaStoreType == "mysql" {
+	} else if Params.CommonCfg.MetaStoreType == util.MetaStoreTypeMysql {
 		conn, err := db.Open(&Params.DBCfg)
 		if err != nil {
 			log.Error("fail connecting to db", zap.Any("error", err))

@@ -21,9 +21,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"go.uber.org/zap"
-
 	"github.com/milvus-io/milvus/internal/log"
+	"github.com/milvus-io/milvus/internal/util"
+	"go.uber.org/zap"
 )
 
 const (
@@ -381,7 +381,7 @@ func (p *commonConfig) initStorageType() {
 }
 
 func (p *commonConfig) initMetaStoreType() {
-	p.MetaStoreType = p.Base.LoadWithDefault("common.metastore.type", "etcd")
+	p.MetaStoreType = p.Base.LoadWithDefault("common.metastore.type", util.MetaStoreTypeEtcd)
 }
 
 func (p *commonConfig) initEnableAuthorization() {

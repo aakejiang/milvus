@@ -28,4 +28,6 @@ const (
 	CredentialSeperator = ":"
 	UserRoot            = "root"
 	DefaultRootPassword = "Milvus"
+	MetaStoreTypeEtcd   = "etcd"
+	MetaStoreTypeMysql  = "mysql"
 )

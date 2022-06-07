@@ -47,6 +47,17 @@ etcd:
     # We recommend using version 1.2 and above
     tlsMinVersion: 1.3
 
+# Related configuration of mysql, used to store Milvus metadata.
+mysql:
+  username: root
+  password: 11111111
+  address: localhost
+  port: 3306
+  dbName: milvus_meta
+  driverName: mysql
+  maxOpenConns: 20
+  maxIdleConns: 5
+
 # please adjust in embedded Milvus: /tmp/milvus/data/
 localStorage:
   path: /var/lib/milvus/data/
@@ -307,15 +318,6 @@ common:
   # Valid values: [etcd, mysql]
   metastore:
     type: etcd
-    db:
-      username: root
-      password: 11111111
-      address: localhost
-      port: 3306
-      dbName: milvus_meta
-      driverName: mysql
-      maxOpenConns: 20
-      maxIdleConns: 5
 
   security:
     authorizationEnabled: false

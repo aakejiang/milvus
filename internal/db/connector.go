@@ -22,6 +22,7 @@ import (
 
 	"github.com/jmoiron/sqlx"
 	"github.com/milvus-io/milvus/internal/log"
+	"github.com/milvus-io/milvus/internal/util"
 	"github.com/milvus-io/milvus/internal/util/paramtable"
 	"go.uber.org/zap"
 )
@@ -35,7 +36,7 @@ type Connector struct {
 func Open(cfg *paramtable.MetaDBConfig) (*sqlx.DB, error) {
 	// load config
 	dataSourceName := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?parseTime=true", cfg.Username, cfg.Password, cfg.Address, cfg.Port, cfg.DBName)
-	db, err := sqlx.Open(cfg.DriverName, dataSourceName)
+	db, err := sqlx.Open(util.MetaStoreTypeMysql, dataSourceName)
 	if err != nil {
 		log.Error("Fail to connect dataSource:[%v] Err:[%v]", zap.String("dataSource", dataSourceName), zap.Error(err))
 		return nil, err

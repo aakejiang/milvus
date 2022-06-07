@@ -206,7 +206,6 @@ type MetaDBConfig struct {
 	Address      string
 	Port         int
 	DBName       string
-	DriverName   string
 	MaxOpenConns int
 	MaxIdleConns int
 }
@@ -222,13 +221,12 @@ func (p *MetaDBConfig) LoadCfgToMemory() {
 	p.initAddress()
 	p.initPort()
 	p.initDbName()
-	p.initDriverName()
 	p.initMaxOpenConns()
 	p.initMaxIdleConns()
 }
 
 func (p *MetaDBConfig) initUsername() {
-	username, err := p.Base.Load("common.metastore.db.username")
+	username, err := p.Base.Load("mysql.username")
 	if err != nil {
 		panic(err)
 	}
@@ -236,7 +234,7 @@ func (p *MetaDBConfig) initUsername() {
 }
 
 func (p *MetaDBConfig) initPassword() {
-	password, err := p.Base.Load("common.metastore.db.password")
+	password, err := p.Base.Load("mysql.password")
 	if err != nil {
 		panic(err)
 	}
@@ -244,7 +242,7 @@ func (p *MetaDBConfig) initPassword() {
 }
 
 func (p *MetaDBConfig) initAddress() {
-	address, err := p.Base.Load("common.metastore.db.address")
+	address, err := p.Base.Load("mysql.address")
 	if err != nil {
 		panic(err)
 	}
@@ -252,33 +250,25 @@ func (p *MetaDBConfig) initAddress() {
 }
 
 func (p *MetaDBConfig) initPort() {
-	port := p.Base.ParseIntWithDefault("common.metastore.db.port", 3306)
+	port := p.Base.ParseIntWithDefault("mysql.port", 3306)
 	p.Port = port
 }
 
 func (p *MetaDBConfig) initDbName() {
-	dbName, err := p.Base.Load("common.metastore.db.dbName")
+	dbName, err := p.Base.Load("mysql.dbName")
 	if err != nil {
 		panic(err)
 	}
 	p.DBName = dbName
 }
 
-func (p *MetaDBConfig) initDriverName() {
-	driverName, err := p.Base.Load("common.metastore.db.driverName")
-	if err != nil {
-		panic(err)
-	}
-	p.DriverName = driverName
-}
-
 func (p *MetaDBConfig) initMaxOpenConns() {
-	maxOpenConns := p.Base.ParseIntWithDefault("common.metastore.db.maxOpenConns", 20)
+	maxOpenConns := p.Base.ParseIntWithDefault("mysql.maxOpenConns", 20)
 	p.MaxOpenConns = maxOpenConns
 }
 
 func (p *MetaDBConfig) initMaxIdleConns() {
-	maxIdleConns := p.Base.ParseIntWithDefault("common.metastore.db.maxIdleConns", 5)
+	maxIdleConns := p.Base.ParseIntWithDefault("mysql.maxIdleConns", 5)
 	p.MaxIdleConns = maxIdleConns
 }
 
