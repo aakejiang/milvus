@@ -31,7 +31,7 @@ func (kc *Catalog) CreateCollection(ctx context.Context, coll *model.Collection,
 	v1, err := proto.Marshal(collInfo)
 	if err != nil {
 		log.Error("create collection marshal fail", zap.String("key", k1), zap.Error(err))
-		return fmt.Errorf("marshal fail key:%s, err:%w", k1, err)
+		return err
 	}
 
 	kvs := map[string]string{k1: string(v1)}
@@ -51,7 +51,7 @@ func (kc *Catalog) CreateCollection(ctx context.Context, coll *model.Collection,
 	err = kc.Snapshot.MultiSave(kvs, ts)
 	if err != nil {
 		log.Error("create collection persist meta fail", zap.String("key", k1), zap.Error(err))
-		panic("create collection persist meta fail")
+		return err
 	}
 
 	return nil
@@ -63,14 +63,14 @@ func (kc *Catalog) CreatePartition(ctx context.Context, coll *model.Collection, 
 	v1, err := proto.Marshal(collInfo)
 	if err != nil {
 		log.Error("create partition marshal fail", zap.String("key", k1), zap.Error(err))
-		return fmt.Errorf("marshal fail key:%s, err:%w", k1, err)
+		return err
 	}
 
 	kvs := map[string]string{k1: string(v1)}
 	err = kc.Snapshot.MultiSave(kvs, ts)
 	if err != nil {
 		log.Error("create partition persist meta fail", zap.String("key", k1), zap.Error(err))
-		panic("create partition persist meta fail")
+		return err
 	}
 
 	// save ddOpStr into etcd
@@ -90,6 +90,7 @@ func (kc *Catalog) CreatePartition(ctx context.Context, coll *model.Collection, 
 	if err != nil {
 		// will not panic, missing create msg
 		log.Warn("create partition persist ddop meta fail", zap.Int64("collectionID", coll.CollectionID), zap.Error(err))
+		return err
 	}
 
 	return nil
@@ -100,42 +101,54 @@ func (kc *Catalog) CreateIndex(ctx context.Context, col *model.Collection, index
 	v1, err := proto.Marshal(ConvertToCollectionPB(col))
 	if err != nil {
 		log.Error("create index marshal fail", zap.String("key", k1), zap.Error(err))
-		return fmt.Errorf("create index marshal fail key:%s, err:%w", k1, err)
+		return err
 	}
 
 	k2 := path.Join(metastore.IndexMetaPrefix, strconv.FormatInt(index.IndexID, 10))
 	v2, err := proto.Marshal(ConvertToIndexPB(index))
 	if err != nil {
 		log.Error("create index marshal fail", zap.String("key", k2), zap.Error(err))
-		return fmt.Errorf("create index marshal fail key:%s, err:%w", k2, err)
+		return err
 	}
 	meta := map[string]string{k1: string(v1), k2: string(v2)}
 
 	err = kc.Txn.MultiSave(meta)
 	if err != nil {
 		log.Error("create index persist meta fail", zap.String("key", k1), zap.Error(err))
-		panic("create index persist meta fail")
+		return err
 	}
 
 	return nil
 }
 
 func (kc *Catalog) AlterIndex(ctx context.Context, oldIndex *model.Index, newIndex *model.Index) error {
+	kvs := make(map[string]string, len(newIndex.SegmentIndexes))
 	for _, segmentIndex := range newIndex.SegmentIndexes {
 		segment := segmentIndex.Segment
-		k := fmt.Sprintf("%s/%d/%d/%d/%d", metastore.SegmentIndexMetaPrefix, newIndex.CollectionID, newIndex.IndexID, segment.PartitionID, segment.SegmentID)
-		segIdxInfo := ConvertToSegmentIndexPB(newIndex)
+		k := fmt.Sprintf("%s/%d/%d/%d/%d", SegmentIndexMetaPrefix, newIndex.CollectionID, newIndex.IndexID, segment.PartitionID, segment.SegmentID)
+		segIdxInfo := &pb.SegmentIndexInfo{
+			CollectionID: newIndex.CollectionID,
+			PartitionID:  segment.PartitionID,
+			SegmentID:    segment.SegmentID,
+			BuildID:      segmentIndex.BuildID,
+			EnableIndex:  segmentIndex.EnableIndex,
+			FieldID:      newIndex.FieldID,
+			IndexID:      newIndex.IndexID,
+		}
+
 		v, err := proto.Marshal(segIdxInfo)
 		if err != nil {
 			log.Error("alter index marshal fail", zap.String("key", k), zap.Error(err))
-			return fmt.Errorf("alter index marshal fail key:%s, err:%w", k, err)
+			return err
 		}
 
-		err = kc.Txn.Save(k, string(v))
-		if err != nil {
-			log.Error("alter index persist meta fail", zap.String("key", k), zap.Error(err))
-			panic("alter index persist meta fail")
-		}
+		kvs[k] = string(v)
+	}
+
+	err := kc.Txn.MultiSave(kvs)
+	if err != nil {
+		log.Error("alter index persist meta fail", zap.Any("segmentIndex", newIndex.SegmentIndexes), zap.Error(err))
+		return err
 	}
 
 	return nil
@@ -146,13 +159,13 @@ func (kc *Catalog) AddAlias(ctx context.Context, collection *model.Collection, t
 	v, err := proto.Marshal(&pb.CollectionInfo{ID: collection.CollectionID, Schema: &schemapb.CollectionSchema{Name: collection.Aliases[0]}})
 	if err != nil {
 		log.Error("create alias marshal fail", zap.String("key", k), zap.Error(err))
-		return fmt.Errorf("create alias marshal fail key:%s, err:%w", k, err)
+		return err
 	}
 
 	err = kc.Snapshot.Save(k, string(v), ts)
 	if err != nil {
 		log.Error("create alias persist meta fail", zap.String("key", k), zap.Error(err))
-		panic("create alias persist meta fail")
+		return err
 	}
 
 	return nil
@@ -163,12 +176,12 @@ func (kc *Catalog) CreateCredential(ctx context.Context, credential *model.Crede
 	v, err := json.Marshal(&internalpb.CredentialInfo{EncryptedPassword: credential.EncryptedPassword})
 	if err != nil {
 		log.Error("create credential marshal fail", zap.String("key", k), zap.Error(err))
-		return fmt.Errorf("create credential marshal fail key:%s, err:%w", k, err)
+		return err
 	}
 	err = kc.Txn.Save(k, string(v))
 	if err != nil {
 		log.Error("create credential persist meta fail", zap.String("key", k), zap.Error(err))
-		return fmt.Errorf("create credential persist meta fail key:%s, err:%w", credential.Username, err)
+		return err
 	}
 
 	return nil
@@ -181,12 +194,14 @@ func (kc *Catalog) GetCollectionByID(ctx context.Context, collectionID typeutil.
 		log.Error("get collection meta fail", zap.String("key", collKey), zap.Error(err))
 		return nil, err
 	}
+
 	collMeta := &pb.CollectionInfo{}
 	err = proto.Unmarshal([]byte(collVal), collMeta)
 	if err != nil {
 		log.Error("collection meta marshal fail", zap.String("key", collKey), zap.Error(err))
 		return nil, err
 	}
+
 	return ConvertCollectionPBToModel(collMeta, nil), nil
 }
 
@@ -224,7 +239,7 @@ func (kc *Catalog) DropCollection(ctx context.Context, collectionInfo *model.Col
 	err := kc.Snapshot.MultiSaveAndRemoveWithPrefix(map[string]string{}, delMetakeysSnap, ts)
 	if err != nil {
 		log.Error("drop collection update meta fail", zap.Int64("collectionID", collectionInfo.CollectionID), zap.Error(err))
-		panic("drop collection update meta fail")
+		return err
 	}
 
 	// Txn operation
@@ -249,6 +264,7 @@ func (kc *Catalog) DropCollection(ctx context.Context, collectionInfo *model.Col
 	err = kc.Txn.MultiSaveAndRemoveWithPrefix(kvs, delMetaKeysTxn)
 	if err != nil {
 		log.Warn("drop collection update meta fail", zap.Int64("collectionID", collectionInfo.CollectionID), zap.Error(err))
+		return err
 	}
 
 	return nil
@@ -261,7 +277,7 @@ func (kc *Catalog) DropPartition(ctx context.Context, collectionInfo *model.Coll
 	v, err := proto.Marshal(collMeta)
 	if err != nil {
 		log.Error("drop partition marshal fail", zap.String("key", k), zap.Error(err))
-		return fmt.Errorf("drop partition marshal fail key:%s, err:%w", k, err)
+		return err
 	}
 
 	err = kc.Snapshot.Save(k, string(v), ts)
@@ -270,7 +286,7 @@ func (kc *Catalog) DropPartition(ctx context.Context, collectionInfo *model.Coll
 			zap.Int64("collectionID", collectionInfo.CollectionID),
 			zap.Int64("partitionID", partitionID),
 			zap.Error(err))
-		panic("drop partition update collection meta fail")
+		return err
 	}
 
 	var delMetaKeys []string
@@ -298,7 +314,7 @@ func (kc *Catalog) DropPartition(ctx context.Context, collectionInfo *model.Coll
 			zap.Int64("collectionID", collectionInfo.CollectionID),
 			zap.Int64("partitionID", partitionID),
 			zap.Error(err))
-		// will not panic, failed Txn shall be treated by garbage related logic
+		return err
 	}
 
 	return nil
@@ -310,9 +326,8 @@ func (kc *Catalog) DropIndex(ctx context.Context, collectionInfo *model.Collecti
 	k := path.Join(metastore.CollectionMetaPrefix, strconv.FormatInt(collectionInfo.CollectionID, 10))
 	v, err := proto.Marshal(collMeta)
 	if err != nil {
-		log.Error("drop index marshal fail",
-			zap.String("key", k), zap.Error(err))
-		return fmt.Errorf("drop partition marshal fail key:%s, err:%w", k, err)
+		log.Error("drop index marshal fail", zap.String("key", k), zap.Error(err))
+		return err
 	}
 	saveMeta := map[string]string{k: string(v)}
 
@@ -327,7 +342,7 @@ func (kc *Catalog) DropIndex(ctx context.Context, collectionInfo *model.Collecti
 			zap.Int64("collectionID", collectionInfo.CollectionID),
 			zap.Int64("indexID", dropIdxID),
 			zap.Error(err))
-		panic("drop partition update meta fail")
+		return err
 	}
 
 	return nil
@@ -338,7 +353,7 @@ func (kc *Catalog) DropCredential(ctx context.Context, username string) error {
 	err := kc.Txn.Remove(k)
 	if err != nil {
 		log.Error("drop credential update meta fail", zap.String("key", k), zap.Error(err))
-		return fmt.Errorf("drop credential update meta fail key:%s, err:%w", username, err)
+		return err
 	}
 
 	return nil
@@ -353,7 +368,7 @@ func (kc *Catalog) DropAlias(ctx context.Context, collectionID typeutil.UniqueID
 	err := kc.Snapshot.MultiSaveAndRemoveWithPrefix(meta, delMetakeys, ts)
 	if err != nil {
 		log.Error("drop alias update meta fail", zap.String("alias", alias), zap.Error(err))
-		panic("drop alias update meta fail")
+		return err
 	}
 
 	return nil
@@ -365,6 +380,7 @@ func (kc *Catalog) GetCollectionByName(ctx context.Context, collectionName strin
 		log.Warn("get collection meta fail", zap.String("collectionName", collectionName), zap.Error(err))
 		return nil, err
 	}
+
 	for _, val := range vals {
 		colMeta := pb.CollectionInfo{}
 		err = proto.Unmarshal([]byte(val), &colMeta)
@@ -408,6 +424,7 @@ func (kc *Catalog) ListAliases(ctx context.Context) ([]*model.Collection, error)
 		log.Error("get aliases meta fail", zap.String("prefix", metastore.CollectionAliasMetaPrefix), zap.Error(err))
 		return nil, err
 	}
+
 	var colls []*model.Collection
 	for _, value := range values {
 		aliasInfo := pb.CollectionInfo{}
@@ -418,6 +435,7 @@ func (kc *Catalog) ListAliases(ctx context.Context) ([]*model.Collection, error)
 		}
 		colls = append(colls, ConvertCollectionPBToModel(&aliasInfo, nil))
 	}
+
 	return colls, nil
 }
 
@@ -460,6 +478,7 @@ func (kc *Catalog) listIndexMeta(ctx context.Context) (map[int64]*model.Index, e
 		log.Error("list index meta fail", zap.String("prefix", metastore.IndexMetaPrefix), zap.Error(err))
 		return nil, err
 	}
+
 	indexes := make(map[int64]*model.Index, len(values))
 	for _, value := range values {
 		if bytes.Equal([]byte(value), SuffixSnapshotTombstone) {

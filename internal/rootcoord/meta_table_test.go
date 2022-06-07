@@ -589,7 +589,7 @@ func TestMetaTable(t *testing.T) {
 			return fmt.Errorf("multi save error")
 		}
 		collInfo.Partitions = []*model.Partition{}
-		assert.Panics(t, func() { mt.AddCollection(collInfo, 0, model.DdOperation{}) })
+		assert.Error(t, mt.AddCollection(collInfo, 0, model.DdOperation{}))
 	})
 
 	wg.Add(1)
@@ -602,7 +602,7 @@ func TestMetaTable(t *testing.T) {
 			return fmt.Errorf("multi save and remove with prefix error")
 		}
 		ts := ftso()
-		assert.Panics(t, func() { mt.DeleteCollection(collInfo.CollectionID, ts, model.DdOperation{}) })
+		assert.Error(t, mt.DeleteCollection(collInfo.CollectionID, ts, model.DdOperation{}))
 	})
 
 	wg.Add(1)
@@ -659,7 +659,7 @@ func TestMetaTable(t *testing.T) {
 		mockKV.multiSave = func(kvs map[string]string, ts typeutil.Timestamp) error {
 			return fmt.Errorf("multi save error")
 		}
-		assert.Panics(t, func() { mt.AddPartition(coll.CollectionID, "no-part", 22, ts, model.DdOperation{}) })
+		assert.Error(t, mt.AddPartition(coll.CollectionID, "no-part", 22, ts, model.DdOperation{}))
 		//err = mt.AddPartition(coll.CollectionID, "no-part", 22, ts, nil)
 		//assert.NotNil(t, err)
 		//assert.EqualError(t, err, "multi save error")
@@ -728,10 +728,8 @@ func TestMetaTable(t *testing.T) {
 		assert.EqualError(t, err, "partition abc does not exist")
 
 		mockKV.save = func(key, value string, ts typeutil.Timestamp) error { return errors.New("mocked error") }
-		assert.Panics(t, func() { mt.DeletePartition(collInfo.CollectionID, partName, ts, model.DdOperation{}) })
-		//_, err = mt.DeletePartition(collInfo.CollectionID, partName, ts, nil)
-		//assert.NotNil(t, err)
-		//assert.EqualError(t, err, "multi save and remove with prefix error")
+		_, err = mt.DeletePartition(collInfo.CollectionID, partName, ts, model.DdOperation{})
+		assert.Error(t, err)
 
 		mt.collID2Meta = make(map[int64]model.Collection)
 		_, err = mt.DeletePartition(collInfo.CollectionID, "abc", ts, model.DdOperation{})
@@ -792,10 +790,10 @@ func TestMetaTable(t *testing.T) {
 
 		segIdxInfo.IndexID = indexID
 		mt.indexID2Meta[indexID] = segIdxInfo
-		mockTxnKV.save = func(key string, value string) error {
+		mockTxnKV.multiSave = func(kvs map[string]string) error {
 			return fmt.Errorf("save error")
 		}
-		assert.Panics(t, func() { mt.AlterIndex(&segIdxInfo) })
+		assert.Error(t, mt.AlterIndex(&segIdxInfo))
 	})
 
 	wg.Add(1)
@@ -861,7 +859,9 @@ func TestMetaTable(t *testing.T) {
 		mockTxnKV.multiSaveAndRemoveWithPrefix = func(saves map[string]string, removals []string) error {
 			return fmt.Errorf("multi save and remove with prefix error")
 		}
-		assert.Panics(t, func() { mt.DropIndex(collInfo.Name, collInfo.Fields[0].Name, idxInfo[0].IndexName) })
+
+		_, _, err = mt.DropIndex(collInfo.Name, collInfo.Fields[0].Name, idxInfo[0].IndexName)
+		assert.Error(t, err)
 	})
 
 	wg.Add(1)
