@@ -38,7 +38,7 @@ type ServiceParam struct {
 
 	LocalStorageCfg LocalStorageConfig
 	EtcdCfg         EtcdConfig
-	DBCfg           DBConfig
+	DBCfg           MetaDBConfig
 	PulsarCfg       PulsarConfig
 	KafkaCfg        KafkaConfig
 	RocksmqCfg      RocksmqConfig
@@ -197,8 +197,8 @@ func (p *LocalStorageConfig) initPath() {
 }
 
 ///////////////////////////////////////////////////////////////////////////////
-// --- mysql ---
-type DBConfig struct {
+// --- meta db ---
+type MetaDBConfig struct {
 	Base *BaseTable
 
 	Username     string
@@ -211,12 +211,12 @@ type DBConfig struct {
 	MaxIdleConns int
 }
 
-func (p *DBConfig) init(base *BaseTable) {
+func (p *MetaDBConfig) init(base *BaseTable) {
 	p.Base = base
 	p.LoadCfgToMemory()
 }
 
-func (p *DBConfig) LoadCfgToMemory() {
+func (p *MetaDBConfig) LoadCfgToMemory() {
 	p.initUsername()
 	p.initPassword()
 	p.initAddress()
@@ -227,58 +227,58 @@ func (p *DBConfig) LoadCfgToMemory() {
 	p.initMaxIdleConns()
 }
 
-func (p *DBConfig) initUsername() {
-	username, err := p.Base.Load("db.username")
+func (p *MetaDBConfig) initUsername() {
+	username, err := p.Base.Load("common.metastore.db.username")
 	if err != nil {
 		panic(err)
 	}
 	p.Username = username
 }
 
-func (p *DBConfig) initPassword() {
-	password, err := p.Base.Load("db.password")
+func (p *MetaDBConfig) initPassword() {
+	password, err := p.Base.Load("common.metastore.db.password")
 	if err != nil {
 		panic(err)
 	}
 	p.Password = password
 }
 
-func (p *DBConfig) initAddress() {
-	address, err := p.Base.Load("db.address")
+func (p *MetaDBConfig) initAddress() {
+	address, err := p.Base.Load("common.metastore.db.address")
 	if err != nil {
 		panic(err)
 	}
 	p.Address = address
 }
 
-func (p *DBConfig) initPort() {
-	port := p.Base.ParseIntWithDefault("db.port", 3306)
+func (p *MetaDBConfig) initPort() {
+	port := p.Base.ParseIntWithDefault("common.metastore.db.port", 3306)
 	p.Port = port
 }
 
-func (p *DBConfig) initDbName() {
-	dbName, err := p.Base.Load("db.dbName")
+func (p *MetaDBConfig) initDbName() {
+	dbName, err := p.Base.Load("common.metastore.db.dbName")
 	if err != nil {
 		panic(err)
 	}
 	p.DBName = dbName
 }
 
-func (p *DBConfig) initDriverName() {
-	driverName, err := p.Base.Load("db.driverName")
+func (p *MetaDBConfig) initDriverName() {
+	driverName, err := p.Base.Load("common.metastore.db.driverName")
 	if err != nil {
 		panic(err)
 	}
 	p.DriverName = driverName
 }
 
-func (p *DBConfig) initMaxOpenConns() {
-	maxOpenConns := p.Base.ParseIntWithDefault("database.maxOpenConns", 20)
+func (p *MetaDBConfig) initMaxOpenConns() {
+	maxOpenConns := p.Base.ParseIntWithDefault("common.metastore.db.maxOpenConns", 20)
 	p.MaxOpenConns = maxOpenConns
 }
 
-func (p *DBConfig) initMaxIdleConns() {
-	maxIdleConns := p.Base.ParseIntWithDefault("database.maxIdleConns", 5)
+func (p *MetaDBConfig) initMaxIdleConns() {
+	maxIdleConns := p.Base.ParseIntWithDefault("common.metastore.db.maxIdleConns", 5)
 	p.MaxIdleConns = maxIdleConns
 }
 

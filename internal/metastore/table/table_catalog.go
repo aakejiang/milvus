@@ -131,12 +131,13 @@ func (tc *TableCatalog) GetCollectionByID(ctx context.Context, collectionID type
 		Partition
 		Field
 	}
-	sqlStr := sqlJoin + " where collections.is_deleted=false and collections.collection_id=?"
+	sqlStr := sqlJoin + " where collections.collection_id=?"
 	var err error
 	if ts > 0 {
 		sqlStr = sqlStr + " and collections.ts<=?"
 		err = tc.DB.Unsafe().Select(&result, sqlStr, collectionID, ts)
 	} else {
+		sqlStr = sqlStr + " and collections.is_deleted=false"
 		err = tc.DB.Unsafe().Select(&result, sqlStr, collectionID)
 	}
 	if err != nil {
@@ -160,13 +161,14 @@ func (tc *TableCatalog) GetCollectionByID(ctx context.Context, collectionID type
 }
 
 func (tc *TableCatalog) GetCollectionIDByName(ctx context.Context, collectionName string, ts typeutil.Timestamp) (typeutil.UniqueID, error) {
-	sqlStr := "select collection_id from collections where is_deleted=false and collection_name=?"
+	sqlStr := "select collection_id from collections where collection_name=?"
 	var collID typeutil.UniqueID
 	var err error
 	if ts > 0 {
-		sqlStr = sqlStr + " and ts<=?"
+		sqlStr = sqlStr + " and ts<=? order by ts desc limit 1"
 		err = tc.DB.Get(&collID, sqlStr, collectionName, ts)
 	} else {
+		sqlStr = sqlStr + " and is_deleted=false"
 		err = tc.DB.Get(&collID, sqlStr, collectionName)
 	}
 	if err != nil {
@@ -191,12 +193,13 @@ func (tc *TableCatalog) ListCollections(ctx context.Context, ts typeutil.Timesta
 		Partition
 		Field
 	}
-	sqlStr := sqlJoin + " where collections.is_deleted=false"
+	sqlStr := sqlJoin
 	var err error
 	if ts > 0 {
-		sqlStr = sqlStr + " and collections.ts<=?"
+		sqlStr = sqlStr + " where collections.ts<=?"
 		err = tc.DB.Unsafe().Select(&result, sqlStr, ts)
 	} else {
+		sqlStr = sqlStr + " where collections.is_deleted=false"
 		err = tc.DB.Unsafe().Select(&result, sqlStr)
 	}
 	if err != nil {
@@ -216,13 +219,14 @@ func (tc *TableCatalog) ListCollections(ctx context.Context, ts typeutil.Timesta
 }
 
 func (tc *TableCatalog) CollectionExists(ctx context.Context, collectionID typeutil.UniqueID, ts typeutil.Timestamp) bool {
-	sqlStr := "select tenant_id, collection_id, collection_name, description, auto_id, ts, properties, created_at from collections where is_deleted=false and collection_id=?"
+	sqlStr := "select tenant_id, collection_id, collection_name, description, auto_id, ts, properties, created_at from collections where collection_id=?"
 	var coll Collection
 	var err error
 	if ts > 0 {
 		sqlStr = sqlStr + " and ts<=?"
 		err = tc.DB.Get(&coll, sqlStr, collectionID, ts)
 	} else {
+		sqlStr = sqlStr + " and is_deleted=false"
 		err = tc.DB.Get(&coll, sqlStr, collectionID)
 	}
 	if err != nil {
