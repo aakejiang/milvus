@@ -135,9 +135,11 @@ func ConvertPartitionDBToModel(partiton *Partition) *model.Partition {
 
 func ConvertIndexDBToModel(index *Index) *model.Index {
 	var indexParams []commonpb.KeyValuePair
-	err := json.Unmarshal([]byte(index.IndexParams), &indexParams)
-	if err != nil {
-		log.Error("unmarshal IndexParams of field failed", zap.String("IndexParams", index.IndexParams), zap.Error(err))
+	if index.IndexParams != "" {
+		err := json.Unmarshal([]byte(index.IndexParams), &indexParams)
+		if err != nil {
+			log.Error("unmarshal IndexParams of field failed", zap.String("IndexParams", index.IndexParams), zap.Error(err))
+		}
 	}
 	return &model.Index{
 		CollectionID: index.CollectionID,

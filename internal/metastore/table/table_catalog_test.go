@@ -686,20 +686,14 @@ func TestAlterIndex(t *testing.T) {
 	}
 
 	// mock update failure
-	mock.ExpectBegin()
-	mock.ExpectExec("update indexes").WillReturnError(fmt.Errorf("update indexes error"))
-	//mock.ExpectExec("update segment_indexes").WillReturnError(fmt.Errorf("update segment_indexes error"))
-	mock.ExpectRollback()
+	mock.ExpectExec("update segment_indexes").WillReturnError(fmt.Errorf("update segment_indexes error"))
 	err := tc.AlterIndex(context.TODO(), oldIndex, newIndex)
-	if !strings.Contains(err.Error(), "update indexes error") {
+	if !strings.Contains(err.Error(), "update segment_indexes error") {
 		t.Fatalf("unexpected error:%s", err)
 	}
 
 	// now we execute our request
-	mock.ExpectBegin()
-	mock.ExpectExec("update indexes").WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("update segment_indexes").WillReturnResult(sqlmock.NewResult(0, 3))
-	mock.ExpectCommit()
 	err = tc.AlterIndex(contextutil.WithTenantID(context.TODO(), tenantID), oldIndex, newIndex)
 	if err != nil {
 		t.Fatalf("unexpected error:%s", err)
