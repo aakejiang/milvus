@@ -11,6 +11,7 @@ import (
 	"github.com/milvus-io/milvus/internal/log"
 	"github.com/milvus-io/milvus/internal/metastore"
 	"github.com/milvus-io/milvus/internal/metastore/model"
+	"github.com/milvus-io/milvus/internal/util/contextutil"
 	"github.com/milvus-io/milvus/internal/util/typeutil"
 	"go.uber.org/zap"
 )
@@ -28,6 +29,7 @@ left join field_schemas on collections.collection_id = field_schemas.collection_
 left join partitions on collections.collection_id = partitions.collection_id and collections.ts = partitions.ts and partitions.is_deleted=false`
 
 func (tc *TableCatalog) CreateCollection(ctx context.Context, collection *model.Collection, ts typeutil.Timestamp) error {
+	tenantID := contextutil.TenantID(ctx)
 	return WithTransaction(tc.DB, func(tx Transaction) error {
 		// sql 1
 		sqlStr1 := "insert into collections(tenant_id, collection_id, collection_name, collection_alias, description, auto_id, ts, properties) values (?,?,?,?,?,?,?,?)"
@@ -44,14 +46,14 @@ func (tc *TableCatalog) CreateCollection(ctx context.Context, collection *model.
 			log.Error("marshal collection properties error", zap.Error(err))
 			return err
 		}
-		_, err = tx.Exec(sqlStr1, collection.TenantID, collection.CollectionID, collection.Name, aliasesStr, collection.Description, collection.AutoID, ts, propertiesStr)
+		_, err = tx.Exec(sqlStr1, tenantID, collection.CollectionID, collection.Name, aliasesStr, collection.Description, collection.AutoID, ts, propertiesStr)
 		if err != nil {
 			log.Error("insert collection failed", zap.Error(err))
 			return err
 		}
 
 		// sql 2
-		sqlStr2 := "insert into field_schemas(field_id, field_name, is_primary_key, description, data_type, type_params, index_params, auto_id, collection_id, ts) values (:field_id, :field_name, :is_primary_key, :description, :data_type, :type_params, :index_params, :auto_id, :collection_id, :ts)"
+		sqlStr2 := "insert into field_schemas(tenant_id, field_id, field_name, is_primary_key, description, data_type, type_params, index_params, auto_id, collection_id, ts) values (:tenant_id, :field_id, :field_name, :is_primary_key, :description, :data_type, :type_params, :index_params, :auto_id, :collection_id, :ts)"
 		var fields []Field
 		for _, field := range collection.Fields {
 			typeParamsBytes, err := json.Marshal(field.TypeParams)
@@ -67,6 +69,7 @@ func (tc *TableCatalog) CreateCollection(ctx context.Context, collection *model.
 			}
 			indexParamsStr := string(indexParamsBytes)
 			f := Field{
+				TenantID:     &collection.TenantID,
 				FieldID:      field.FieldID,
 				FieldName:    field.Name,
 				IsPrimaryKey: field.IsPrimaryKey,
@@ -89,10 +92,11 @@ func (tc *TableCatalog) CreateCollection(ctx context.Context, collection *model.
 		}
 
 		// sql 3
-		sqlStr3 := "insert into partitions(partition_id, partition_name, partition_created_timestamp, collection_id, ts) values (:partition_id, :partition_name, :partition_created_timestamp, :collection_id, :ts)"
+		sqlStr3 := "insert into partitions(tenant_id, partition_id, partition_name, partition_created_timestamp, collection_id, ts) values (:tenant_id, :partition_id, :partition_name, :partition_created_timestamp, :collection_id, :ts)"
 		var partitions []Partition
 		for _, partition := range collection.Partitions {
 			p := Partition{
+				TenantID:                  &collection.TenantID,
 				PartitionID:               partition.PartitionID,
 				PartitionName:             partition.PartitionName,
 				PartitionCreatedTimestamp: partition.PartitionCreatedTimestamp,
@@ -107,20 +111,6 @@ func (tc *TableCatalog) CreateCollection(ctx context.Context, collection *model.
 			return err
 		}
 
-		// sql 4
-		if ddOpStr, ok := collection.Extra[metastore.DDOperationPrefix]; ok {
-			var ddOp = ddOpStr.(model.DdOperation)
-			if ddOp.Type != "" && ddOp.Body != "" {
-				sqlStr4 := "insert into dd_msg_send(operation_type, operation_body, is_sent) values (?,?,?)"
-				isDDMsgSent := false
-				_, err = tx.Exec(sqlStr4, ddOp.Type, ddOp.Body, isDDMsgSent)
-				if err != nil {
-					log.Error("insert dd_msg_send failed", zap.Error(err))
-					return err
-				}
-			}
-		}
-
 		return nil
 	})
 }
@@ -132,20 +122,25 @@ func (tc *TableCatalog) GetCollectionByID(ctx context.Context, collectionID type
 		Field
 	}
 	sqlStr := sqlJoin + " where collections.collection_id=?"
-	var err error
+	args := []interface{}{collectionID}
 	if ts > 0 {
 		sqlStr = sqlStr + " and collections.ts<=?"
-		err = tc.DB.Unsafe().Select(&result, sqlStr, collectionID, ts)
+		args = append(args, ts)
 	} else {
 		sqlStr = sqlStr + " and collections.is_deleted=false"
-		err = tc.DB.Unsafe().Select(&result, sqlStr, collectionID)
 	}
+	tenantID := contextutil.TenantID(ctx)
+	if tenantID != "" {
+		sqlStr = sqlStr + " and collections.tenant_id=?"
+		args = append(args, tenantID)
+	}
+	err := tc.DB.Unsafe().Select(&result, sqlStr, args...)
 	if err != nil {
 		log.Error("get collection by id failed", zap.Int64("collID", collectionID), zap.Uint64("ts", ts), zap.Error(err))
 		return nil, err
 	}
 
-	indexMap, _ := tc.listIndexesByCollectionID(collectionID) // populate index info
+	indexMap, _ := tc.listIndexesByCollectionID(ctx, collectionID) // populate index info
 	var colls []*model.Collection
 	for _, record := range result {
 		index, _ := indexMap[collectionID]
@@ -163,14 +158,19 @@ func (tc *TableCatalog) GetCollectionByID(ctx context.Context, collectionID type
 func (tc *TableCatalog) GetCollectionIDByName(ctx context.Context, collectionName string, ts typeutil.Timestamp) (typeutil.UniqueID, error) {
 	sqlStr := "select collection_id from collections where collection_name=?"
 	var collID typeutil.UniqueID
-	var err error
+	args := []interface{}{collectionName}
 	if ts > 0 {
 		sqlStr = sqlStr + " and ts<=? order by ts desc limit 1"
-		err = tc.DB.Get(&collID, sqlStr, collectionName, ts)
+		args = append(args, ts)
 	} else {
 		sqlStr = sqlStr + " and is_deleted=false"
-		err = tc.DB.Get(&collID, sqlStr, collectionName)
 	}
+	tenantID := contextutil.TenantID(ctx)
+	if tenantID != "" {
+		sqlStr = sqlStr + " and tenant_id=?"
+		args = append(args, tenantID)
+	}
+	err := tc.DB.Get(&collID, sqlStr, args...)
 	if err != nil {
 		log.Error("get collection id by name failed", zap.String("collName", collectionName), zap.Uint64("ts", ts), zap.Error(err))
 		return 0, err
@@ -188,26 +188,31 @@ func (tc *TableCatalog) GetCollectionByName(ctx context.Context, collectionName 
 }
 
 func (tc *TableCatalog) ListCollections(ctx context.Context, ts typeutil.Timestamp) (map[string]*model.Collection, error) {
+	sqlStr := sqlJoin
+	args := []interface{}{}
+	if ts > 0 {
+		sqlStr = sqlStr + " where collections.ts<=?"
+		args = append(args, ts)
+	} else {
+		sqlStr = sqlStr + " where collections.is_deleted=false"
+	}
+	tenantID := contextutil.TenantID(ctx)
+	if tenantID != "" {
+		sqlStr = sqlStr + " and tenant_id=?"
+		args = append(args, tenantID)
+	}
 	var result []struct {
 		Collection
 		Partition
 		Field
 	}
-	sqlStr := sqlJoin
-	var err error
-	if ts > 0 {
-		sqlStr = sqlStr + " where collections.ts<=?"
-		err = tc.DB.Unsafe().Select(&result, sqlStr, ts)
-	} else {
-		sqlStr = sqlStr + " where collections.is_deleted=false"
-		err = tc.DB.Unsafe().Select(&result, sqlStr)
-	}
+	err := tc.DB.Unsafe().Select(&result, sqlStr, args...)
 	if err != nil {
 		log.Error("list collection failed", zap.Uint64("ts", ts), zap.Error(err))
 		return nil, err
 	}
 
-	indexMap, _ := tc.listIndexesByCollectionID(-1) // populate index info
+	indexMap, _ := tc.listIndexesByCollectionID(ctx, -1) // populate index info
 	var colls []*model.Collection
 	for _, record := range result {
 		coll := record.Collection
@@ -221,14 +226,19 @@ func (tc *TableCatalog) ListCollections(ctx context.Context, ts typeutil.Timesta
 func (tc *TableCatalog) CollectionExists(ctx context.Context, collectionID typeutil.UniqueID, ts typeutil.Timestamp) bool {
 	sqlStr := "select tenant_id, collection_id, collection_name, description, auto_id, ts, properties, created_at from collections where collection_id=?"
 	var coll Collection
-	var err error
+	args := []interface{}{collectionID}
 	if ts > 0 {
 		sqlStr = sqlStr + " and ts<=?"
-		err = tc.DB.Get(&coll, sqlStr, collectionID, ts)
+		args = append(args, ts)
 	} else {
 		sqlStr = sqlStr + " and is_deleted=false"
-		err = tc.DB.Get(&coll, sqlStr, collectionID)
 	}
+	tenantID := contextutil.TenantID(ctx)
+	if tenantID != "" {
+		sqlStr = sqlStr + " and tenant_id=?"
+		args = append(args, tenantID)
+	}
+	err := tc.DB.Get(&coll, sqlStr, args...)
 	if err != nil {
 		log.Error("get collection by ID failed", zap.Int64("collID", collectionID), zap.Uint64("ts", ts), zap.Error(err))
 		// Also, an error is returned if the result set is empty.
@@ -238,10 +248,16 @@ func (tc *TableCatalog) CollectionExists(ctx context.Context, collectionID typeu
 }
 
 func (tc *TableCatalog) DropCollection(ctx context.Context, collectionInfo *model.Collection, ts typeutil.Timestamp) error {
+	tenantID := contextutil.TenantID(ctx)
 	return WithTransaction(tc.DB, func(tx Transaction) error {
 		// sql 1
-		sqlStr1 := "update collections set is_deleted=true where collection_id=?"
-		rs, err := tx.Exec(sqlStr1, collectionInfo.CollectionID)
+		sqlStr1 := "update collections set is_deleted=true where collection_id=? and ts=?"
+		args1 := []interface{}{collectionInfo.CollectionID, ts}
+		if tenantID != "" {
+			sqlStr1 = sqlStr1 + " and tenant_id=?"
+			args1 = append(args1, tenantID)
+		}
+		rs, err := tx.Exec(sqlStr1, args1...)
 		if err != nil {
 			log.Error("delete collection failed", zap.Error(err))
 			return err
@@ -255,7 +271,12 @@ func (tc *TableCatalog) DropCollection(ctx context.Context, collectionInfo *mode
 
 		// sql 2
 		sqlStr2 := "update partitions set is_deleted=true where collection_id=? and ts=?"
-		rs, err = tx.Exec(sqlStr2, collectionInfo.CollectionID, ts)
+		args2 := []interface{}{collectionInfo.CollectionID, ts}
+		if tenantID != "" {
+			sqlStr2 = sqlStr2 + " and tenant_id=?"
+			args2 = append(args2, tenantID)
+		}
+		rs, err = tx.Exec(sqlStr2, args2...)
 		if err != nil {
 			log.Error("delete partition failed", zap.Error(err))
 			return err
@@ -269,7 +290,12 @@ func (tc *TableCatalog) DropCollection(ctx context.Context, collectionInfo *mode
 
 		// sql 3
 		sqlStr3 := "update field_schemas set is_deleted=true where collection_id=? and ts=?"
-		rs, err = tx.Exec(sqlStr3, collectionInfo.CollectionID, ts)
+		args3 := []interface{}{collectionInfo.CollectionID, ts}
+		if tenantID != "" {
+			sqlStr3 = sqlStr3 + " and tenant_id=?"
+			args3 = append(args3, tenantID)
+		}
+		rs, err = tx.Exec(sqlStr3, args3...)
 		if err != nil {
 			log.Error("delete field_schemas failed", zap.Error(err))
 			return err
@@ -282,8 +308,13 @@ func (tc *TableCatalog) DropCollection(ctx context.Context, collectionInfo *mode
 		log.Debug("table field_schemas RowsAffected", zap.Any("rows", n))
 
 		// sql 4
-		sqlStr4 := "update indexes set is_deleted=true where collection_id=?"
-		rs, err = tx.Exec(sqlStr4, collectionInfo.CollectionID)
+		sqlStr4 := "update indexes set is_deleted=true where collection_id=? and ts=?"
+		args4 := []interface{}{collectionInfo.CollectionID, ts}
+		if tenantID != "" {
+			sqlStr4 = sqlStr4 + " and tenant_id=?"
+			args4 = append(args4, tenantID)
+		}
+		rs, err = tx.Exec(sqlStr4, args4...)
 		if err != nil {
 			log.Error("update indexes by collection ID failed", zap.Error(err))
 			return err
@@ -296,8 +327,13 @@ func (tc *TableCatalog) DropCollection(ctx context.Context, collectionInfo *mode
 		log.Debug("table indexes RowsAffected", zap.Any("rows", n))
 
 		// sql 5
-		sqlStr5 := "update segment_indexes set is_deleted=true where collection_id=?"
-		rs, err = tx.Exec(sqlStr5, collectionInfo.CollectionID)
+		sqlStr5 := "update segment_indexes set is_deleted=true where collection_id=? and ts=?"
+		args5 := []interface{}{collectionInfo.CollectionID, ts}
+		if tenantID != "" {
+			sqlStr5 = sqlStr5 + " and tenant_id=?"
+			args5 = append(args5, tenantID)
+		}
+		rs, err = tx.Exec(sqlStr5, args5...)
 		if err != nil {
 			log.Error("update segment_indexes by collection ID failed", zap.Error(err))
 			return err
@@ -309,108 +345,66 @@ func (tc *TableCatalog) DropCollection(ctx context.Context, collectionInfo *mode
 		}
 		log.Debug("table segment_indexes RowsAffected", zap.Any("rows", n))
 
-		// sql 6
-		if ddOpStr, ok := collectionInfo.Extra[metastore.DDOperationPrefix]; ok {
-			var ddOp = ddOpStr.(model.DdOperation)
-			if ddOp.Type != "" && ddOp.Body != "" {
-				sqlStr6 := "insert into dd_msg_send(operation_type, operation_body, is_sent) values (?,?,?)"
-				isDDMsgSent := false
-				rs, err = tx.Exec(sqlStr6, ddOp.Type, ddOp.Body, isDDMsgSent)
-				if err != nil {
-					log.Error("insert dd_msg_send failed", zap.Error(err))
-					return err
-				}
-				n, err = rs.RowsAffected()
-				if err != nil {
-					log.Error("get RowsAffected failed", zap.Error(err))
-					return err
-				}
-				log.Debug("table dd_msg_send RowsAffected", zap.Any("rows", n))
-			}
-		}
-
 		return err
 	})
 }
 
 func (tc *TableCatalog) CreatePartition(ctx context.Context, coll *model.Collection, partition *model.Partition, ts typeutil.Timestamp) error {
-	return WithTransaction(tc.DB, func(tx Transaction) error {
-		// sql 1
-		sqlStr1 := "insert into partitions(partition_id, partition_name, partition_created_timestamp, collection_id, ts) values (:partition_id, :partition_name, :partition_created_timestamp, :collection_id, :ts)"
-		p := Partition{
-			PartitionID:               partition.PartitionID,
-			PartitionName:             partition.PartitionName,
-			PartitionCreatedTimestamp: partition.PartitionCreatedTimestamp,
-			CollectionID:              coll.CollectionID,
-			Ts:                        ts,
-		}
-		_, err := tc.DB.NamedExec(sqlStr1, []Partition{p})
-		if err != nil {
-			log.Error("insert partitions failed", zap.Error(err))
-			return err
-		}
+	tenantID := contextutil.TenantID(ctx)
+	// sql 1
+	sqlStr1 := "insert into partitions(tenant_id, partition_id, partition_name, partition_created_timestamp, collection_id, ts) values (:tenant_id, :partition_id, :partition_name, :partition_created_timestamp, :collection_id, :ts)"
+	p := Partition{
+		TenantID:                  &tenantID,
+		PartitionID:               partition.PartitionID,
+		PartitionName:             partition.PartitionName,
+		PartitionCreatedTimestamp: partition.PartitionCreatedTimestamp,
+		CollectionID:              coll.CollectionID,
+		Ts:                        ts,
+	}
+	_, err := tc.DB.NamedExec(sqlStr1, []Partition{p})
+	if err != nil {
+		log.Error("insert partitions failed", zap.Error(err))
+		return err
+	}
 
-		// sql 2
-		if ddOpStr, ok := coll.Extra[metastore.DDOperationPrefix]; ok {
-			var ddOp = ddOpStr.(model.DdOperation)
-			if ddOp.Type != "" && ddOp.Body != "" {
-				sqlStr2 := "insert into dd_msg_send(operation_type, operation_body, is_sent) values (?,?,?)"
-				isDDMsgSent := false
-				_, err = tx.Exec(sqlStr2, ddOp.Type, ddOp.Body, isDDMsgSent)
-				if err != nil {
-					log.Error("insert dd_msg_send failed", zap.Error(err))
-					return err
-				}
-			}
-		}
-
-		return nil
-	})
+	return nil
 }
 
 func (tc *TableCatalog) DropPartition(ctx context.Context, collection *model.Collection, partitionID typeutil.UniqueID, ts typeutil.Timestamp) error {
-	return WithTransaction(tc.DB, func(tx Transaction) error {
-		sqlStr1 := "update partitions set is_deleted=true where partition_id=? and ts=?"
-		rs, err := tc.DB.Exec(sqlStr1, partitionID, ts)
-		if err != nil {
-			log.Error("delete partition failed", zap.Error(err))
-			return err
-		}
-		n, err := rs.RowsAffected()
-		if err != nil {
-			log.Error("get RowsAffected failed", zap.Error(err))
-			return err
-		}
-		log.Debug("table partitions RowsAffected", zap.Any("rows", n))
+	sqlStr1 := "update partitions set is_deleted=true where partition_id=? and ts=?"
+	args := []interface{}{partitionID, ts}
+	tenantID := contextutil.TenantID(ctx)
+	if tenantID != "" {
+		sqlStr1 = sqlStr1 + " and tenant_id=?"
+		args = append(args, tenantID)
+	}
+	rs, err := tc.DB.Exec(sqlStr1, args...)
+	if err != nil {
+		log.Error("delete partition failed", zap.Error(err))
+		return err
+	}
+	n, err := rs.RowsAffected()
+	if err != nil {
+		log.Error("get RowsAffected failed", zap.Error(err))
+		return err
+	}
+	log.Debug("table partitions RowsAffected", zap.Any("rows", n))
 
-		// sql 2
-		if ddOpStr, ok := collection.Extra[metastore.DDOperationPrefix]; ok {
-			var ddOp = ddOpStr.(model.DdOperation)
-			if ddOp.Type != "" && ddOp.Body != "" {
-				sqlStr2 := "insert into dd_msg_send(operation_type, operation_body, is_sent) values (?,?,?)"
-				isDDMsgSent := false
-				_, err = tx.Exec(sqlStr2, ddOp.Type, ddOp.Body, isDDMsgSent)
-				if err != nil {
-					log.Error("insert dd_msg_send failed", zap.Error(err))
-					return err
-				}
-			}
-		}
-
-		return nil
-	})
+	return nil
 }
 
 func (tc *TableCatalog) CreateIndex(ctx context.Context, col *model.Collection, index *model.Index) error {
+	tenantID := contextutil.TenantID(ctx)
 	return WithTransaction(tc.DB, func(tx Transaction) error {
 		// sql 1
-		sqlStr1 := "insert into indexes(collection_id, field_id, index_id, index_name, index_params) values (:collection_id, :field_id, :index_id, :index_name, :index_params)"
+		sqlStr1 := "insert into indexes(tenant_id, collection_id, field_id, index_id, index_name, index_params) values (:tenant_id, :collection_id, :field_id, :index_id, :index_name, :index_params)"
 		indexParamsBytes, err := json.Marshal(index.IndexParams)
 		if err != nil {
 			log.Error("marshal IndexParams of field failed", zap.Error(err))
 		}
 		indexParamsStr := string(indexParamsBytes)
 		idx := Index{
+			TenantID:     &tenantID,
 			FieldID:      index.FieldID,
 			CollectionID: index.CollectionID,
 			IndexID:      index.IndexID,
@@ -424,7 +418,7 @@ func (tc *TableCatalog) CreateIndex(ctx context.Context, col *model.Collection, 
 		}
 
 		// sql 2
-		sqlStr2 := "insert into segment_indexes(collection_id, partition_id, segment_id, field_id, index_id, build_id, enable_index, index_file_paths, index_size) values (:collection_id, :partition_id, :segment_id, :field_id, :index_id, :build_id, :enable_index, :index_file_paths, :index_size)"
+		sqlStr2 := "insert into segment_indexes(tenant_id, collection_id, partition_id, segment_id, field_id, index_id, build_id, enable_index, index_file_paths, index_size) values (:tenant_id, :collection_id, :partition_id, :segment_id, :field_id, :index_id, :build_id, :enable_index, :index_file_paths, :index_size)"
 		var segIndexes []SegmentIndex
 		for _, segIndex := range index.SegmentIndexes {
 			indexFilePaths, err := json.Marshal(segIndex.IndexFilePaths)
@@ -434,6 +428,7 @@ func (tc *TableCatalog) CreateIndex(ctx context.Context, col *model.Collection, 
 			}
 			indexFilePathsStr := string(indexFilePaths)
 			si := SegmentIndex{
+				TenantID:       &tenantID,
 				CollectionID:   index.CollectionID,
 				PartitionID:    segIndex.PartitionID,
 				SegmentID:      segIndex.SegmentID,
@@ -457,6 +452,7 @@ func (tc *TableCatalog) CreateIndex(ctx context.Context, col *model.Collection, 
 }
 
 func (tc *TableCatalog) AlterIndex(ctx context.Context, oldIndex *model.Index, newIndex *model.Index) error {
+	tenantID := contextutil.TenantID(ctx)
 	return WithTransaction(tc.DB, func(tx Transaction) error {
 		// sql 1
 		sqlStr1 := "update indexes set index_name=?, index_params=? where index_id=?"
@@ -465,7 +461,12 @@ func (tc *TableCatalog) AlterIndex(ctx context.Context, oldIndex *model.Index, n
 			log.Error("marshal IndexParams of index failed", zap.Error(err))
 		}
 		indexParamsStr := string(indexParamsBytes)
-		_, err = tx.Exec(sqlStr1, newIndex.IndexName, indexParamsStr, oldIndex.IndexID)
+		args1 := []interface{}{newIndex.IndexName, indexParamsStr, oldIndex.IndexID}
+		if tenantID != "" {
+			sqlStr1 = sqlStr1 + " and tenant_id=?"
+			args1 = append(args1, tenantID)
+		}
+		_, err = tx.Exec(sqlStr1, args1...)
 		if err != nil {
 			log.Error("update indexes failed", zap.Error(err))
 			return err
@@ -480,7 +481,12 @@ func (tc *TableCatalog) AlterIndex(ctx context.Context, oldIndex *model.Index, n
 				continue
 			}
 			indexFilePathsStr := string(indexFilePaths)
-			_, err = tx.Exec(sqlStr2, segIndex.BuildID, segIndex.EnableIndex, indexFilePathsStr, segIndex.IndexSize, oldIndex.CollectionID, segIndex.SegmentID, oldIndex.FieldID, oldIndex.IndexID)
+			args2 := []interface{}{segIndex.BuildID, segIndex.EnableIndex, indexFilePathsStr, segIndex.IndexSize, oldIndex.CollectionID, segIndex.SegmentID, oldIndex.FieldID, oldIndex.IndexID}
+			if tenantID != "" {
+				sqlStr2 = sqlStr2 + " and tenant_id=?"
+				args2 = append(args2, tenantID)
+			}
+			_, err = tx.Exec(sqlStr2, args2...)
 			if err != nil {
 				log.Error("update segment_indexes failed", zap.Error(err))
 				return err
@@ -492,10 +498,16 @@ func (tc *TableCatalog) AlterIndex(ctx context.Context, oldIndex *model.Index, n
 }
 
 func (tc *TableCatalog) DropIndex(ctx context.Context, collectionInfo *model.Collection, dropIdxID typeutil.UniqueID, ts typeutil.Timestamp) error {
+	tenantID := contextutil.TenantID(ctx)
 	return WithTransaction(tc.DB, func(tx Transaction) error {
 		// sql 1
-		sqlStr1 := "update indexes set is_deleted=true where index_id=?"
-		rs, err := tx.Exec(sqlStr1, dropIdxID)
+		sqlStr1 := "update indexes set is_deleted=true where index_id=? and ts=?"
+		args1 := []interface{}{dropIdxID, ts}
+		if tenantID != "" {
+			sqlStr1 = sqlStr1 + " and tenant_id=?"
+			args1 = append(args1, tenantID)
+		}
+		rs, err := tx.Exec(sqlStr1, args1...)
 		if err != nil {
 			log.Error("update indexes by index ID failed", zap.Error(err), zap.Int64("indexID", dropIdxID))
 			return err
@@ -508,8 +520,13 @@ func (tc *TableCatalog) DropIndex(ctx context.Context, collectionInfo *model.Col
 		log.Debug("table indexes RowsAffected", zap.Any("rows", n))
 
 		// sql 2
-		sqlStr2 := "update segment_indexes set is_deleted=true where index_id=?"
-		rs, err = tx.Exec(sqlStr2, dropIdxID)
+		sqlStr2 := "update segment_indexes set is_deleted=true where index_id=? and ts=?"
+		args2 := []interface{}{dropIdxID, ts}
+		if tenantID != "" {
+			sqlStr2 = sqlStr2 + " and tenant_id=?"
+			args2 = append(args2, tenantID)
+		}
+		rs, err = tx.Exec(sqlStr2, args2...)
 		if err != nil {
 			log.Error("update segment_indexes by index ID failed", zap.Error(err), zap.Int64("indexID", dropIdxID))
 			return err
@@ -525,20 +542,21 @@ func (tc *TableCatalog) DropIndex(ctx context.Context, collectionInfo *model.Col
 	})
 }
 
-func (tc *TableCatalog) listIndexesByCollectionID(collID typeutil.UniqueID) (map[int64]Index, error) {
+func (tc *TableCatalog) listIndexesByCollectionID(ctx context.Context, collID typeutil.UniqueID) (map[int64]Index, error) {
 	var resultMap map[int64]Index
 
-	var indexes []Index
 	sqlStr := `select * from indexes where is_deleted=false`
 	args := []interface{}{}
 	if collID > 0 {
 		sqlStr = sqlStr + " and collection_id=?"
 		args = append(args, collID)
 	}
-	//if ts > 0 {
-	//	sqlStr = sqlStr + " and ts<=?"
-	//	args = append(args, ts)
-	//}
+	tenantID := contextutil.TenantID(ctx)
+	if tenantID != "" {
+		sqlStr = sqlStr + " and tenant_id=?"
+		args = append(args, tenantID)
+	}
+	var indexes []Index
 	err := tc.DB.Select(&indexes, sqlStr, args...)
 	if err != nil {
 		log.Error("list indexes by collectionID failed", zap.Int64("collID", collID), zap.Error(err))
@@ -560,11 +578,17 @@ func (tc *TableCatalog) ListIndexes(ctx context.Context) ([]*model.Index, error)
 		from indexes
 		left join segment_indexes on indexes.index_id = segment_indexes.index_id and segment_indexes.is_deleted = false
 		where indexes.is_deleted=false`
+	args := []interface{}{}
+	tenantID := contextutil.TenantID(ctx)
+	if tenantID != "" {
+		sqlStr = sqlStr + " and indexes.tenant_id=?"
+		args = append(args, tenantID)
+	}
 	var result []struct {
 		Index
 		SegmentIndex
 	}
-	err := tc.DB.Unsafe().Select(&result, sqlStr)
+	err := tc.DB.Unsafe().Select(&result, sqlStr, args...)
 	if err != nil {
 		log.Error("list indexes failed", zap.Error(err))
 		return nil, err
@@ -595,7 +619,13 @@ func (tc *TableCatalog) AddAlias(ctx context.Context, collection *model.Collecti
 	}
 	// sql 1
 	sqlStr1 := "update collections set collection_alias=? where collection_id=? and ts=?"
-	rs, err := tc.DB.Exec(sqlStr1, aliasesStr, collection.CollectionID, ts)
+	args1 := []interface{}{aliasesStr, collection.CollectionID, ts}
+	tenantID := contextutil.TenantID(ctx)
+	if tenantID != "" {
+		sqlStr1 = sqlStr1 + " and tenant_id=?"
+		args1 = append(args1, tenantID)
+	}
+	rs, err := tc.DB.Exec(sqlStr1, args1...)
 	if err != nil {
 		log.Error("add alias failed", zap.Error(err))
 		return err
@@ -630,7 +660,13 @@ func (tc *TableCatalog) DropAlias(ctx context.Context, collectionID typeutil.Uni
 	}
 	// sql 1
 	sqlStr1 := "update collections set collection_alias=? where collection_id=? and ts=?"
-	rs, err := tc.DB.Exec(sqlStr1, aliasesStr, collectionID, ts)
+	args1 := []interface{}{aliasesStr, collectionID, ts}
+	tenantID := contextutil.TenantID(ctx)
+	if tenantID != "" {
+		sqlStr1 = sqlStr1 + " and tenant_id=?"
+		args1 = append(args1, tenantID)
+	}
+	rs, err := tc.DB.Exec(sqlStr1, args1...)
 	if err != nil {
 		log.Error("drop alias failed", zap.Error(err))
 		return err
@@ -647,9 +683,15 @@ func (tc *TableCatalog) DropAlias(ctx context.Context, collectionID typeutil.Uni
 
 // ListAliases query collection ID and aliases only, other information are not needed
 func (tc *TableCatalog) ListAliases(ctx context.Context) ([]*model.Collection, error) {
-	sqlStr := "select collection_id, collection_alias from collections where is_deleted=false and collection_alias is not null"
-	var colls []*Collection
-	err := tc.DB.Select(&colls, sqlStr)
+	sqlStr := "select collection_id, collection_alias from collections where is_deleted=false and collection_alias is not null and collection_alias!=''"
+	args := []interface{}{}
+	tenantID := contextutil.TenantID(ctx)
+	if tenantID != "" {
+		sqlStr = sqlStr + " and tenant_id=?"
+		args = append(args, tenantID)
+	}
+	var colls []Collection
+	err := tc.DB.Select(&colls, sqlStr, args...)
 	if err != nil {
 		log.Error("list collection alias failed", zap.Error(err))
 		return nil, err
@@ -679,8 +721,14 @@ func (tc *TableCatalog) ListAliases(ctx context.Context) ([]*model.Collection, e
 
 func (tc *TableCatalog) GetCredential(ctx context.Context, username string) (*model.Credential, error) {
 	sqlStr := "select tenant_id, username, encrypted_password, is_super, is_deleted from credential_users where is_deleted=false and username=?"
+	args := []interface{}{username}
+	tenantID := contextutil.TenantID(ctx)
+	if tenantID != "" {
+		sqlStr = sqlStr + " and tenant_id=?"
+		args = append(args, tenantID)
+	}
 	var user User
-	err := tc.DB.Get(&user, sqlStr, username)
+	err := tc.DB.Get(&user, sqlStr, args...)
 	if err != nil {
 		log.Error("get credential user by username failed", zap.Error(err))
 		return nil, err
@@ -689,8 +737,10 @@ func (tc *TableCatalog) GetCredential(ctx context.Context, username string) (*mo
 }
 
 func (tc *TableCatalog) CreateCredential(ctx context.Context, credential *model.Credential) error {
-	sqlStr1 := "insert into credential_users(username, encrypted_password) values (:username, :encrypted_password)"
+	sqlStr1 := "insert into credential_users(tenant_id, username, encrypted_password) values (:tenant_id, :username, :encrypted_password)"
+	tenantID := contextutil.TenantID(ctx)
 	user := User{
+		TenantID:          &tenantID,
 		Username:          credential.Username,
 		EncryptedPassword: credential.EncryptedPassword,
 	}
@@ -705,7 +755,13 @@ func (tc *TableCatalog) CreateCredential(ctx context.Context, credential *model.
 
 func (tc *TableCatalog) DropCredential(ctx context.Context, username string) error {
 	sqlStr1 := "update credential_users set is_deleted=true where username=?"
-	rs, err := tc.DB.Exec(sqlStr1, username)
+	args := []interface{}{username}
+	tenantID := contextutil.TenantID(ctx)
+	if tenantID != "" {
+		sqlStr1 = sqlStr1 + " and tenant_id=?"
+		args = append(args, tenantID)
+	}
+	rs, err := tc.DB.Exec(sqlStr1, args...)
 	if err != nil {
 		log.Error("delete credential_users failed", zap.Error(err))
 		return err
@@ -721,8 +777,14 @@ func (tc *TableCatalog) DropCredential(ctx context.Context, username string) err
 
 func (tc *TableCatalog) ListCredentials(ctx context.Context) ([]string, error) {
 	sqlStr := "select username from credential_users where is_deleted=false"
+	args := []interface{}{}
+	tenantID := contextutil.TenantID(ctx)
+	if tenantID != "" {
+		sqlStr = sqlStr + " and tenant_id=?"
+		args = append(args, tenantID)
+	}
 	var usernames []string
-	err := tc.DB.Select(&usernames, sqlStr)
+	err := tc.DB.Select(&usernames, sqlStr, args...)
 	if err != nil {
 		log.Error("list credential usernames failed", zap.Error(err))
 		return nil, err

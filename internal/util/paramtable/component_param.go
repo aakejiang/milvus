@@ -134,6 +134,8 @@ type commonConfig struct {
 	MetaStoreType string
 
 	AuthorizationEnabled bool
+
+	ClusterName string
 }
 
 func (p *commonConfig) init(base *BaseTable) {
@@ -173,6 +175,8 @@ func (p *commonConfig) init(base *BaseTable) {
 	p.initMetaStoreType()
 
 	p.initEnableAuthorization()
+
+	p.initClusterName()
 }
 
 func (p *commonConfig) initClusterPrefix() {
@@ -386,6 +390,10 @@ func (p *commonConfig) initMetaStoreType() {
 
 func (p *commonConfig) initEnableAuthorization() {
 	p.AuthorizationEnabled = p.Base.ParseBool("common.security.authorizationEnabled", false)
+}
+
+func (p *commonConfig) initClusterName() {
+	p.ClusterName = p.Base.LoadWithDefault("common.cluster.name", "")
 }
 
 ///////////////////////////////////////////////////////////////////////////////

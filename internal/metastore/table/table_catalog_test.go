@@ -18,6 +18,7 @@ import (
 	"github.com/milvus-io/milvus/internal/proto/commonpb"
 	"github.com/milvus-io/milvus/internal/proto/internalpb"
 	"github.com/milvus-io/milvus/internal/proto/schemapb"
+	"github.com/milvus-io/milvus/internal/util/contextutil"
 	"github.com/milvus-io/milvus/internal/util/typeutil"
 )
 
@@ -117,26 +118,14 @@ func TestCreateCollection(t *testing.T) {
 	mock, tc := getMock(t)
 	defer tc.DB.Close()
 
-	ddOp, _ := metastore.ToDdOperation(&internalpb.CreateCollectionRequest{
-		CollectionName: collName,
-		PartitionName:  partName,
-		CollectionID:   collID,
-		PartitionID:    partID,
-	}, "CreateCollection")
-	meta := map[string]interface{}{}
-	meta[metastore.DDMsgSendPrefix] = false
-	meta[metastore.DDOperationPrefix] = ddOp
-	collInfo.Extra = meta
-
 	mock.ExpectBegin()
 	mock.ExpectExec("insert into collections").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec("insert into field_schemas").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec("insert into partitions").WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectExec("insert into dd_msg_send").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 
 	// now we execute our method
-	if err := tc.CreateCollection(context.TODO(), collInfo, ts); err != nil {
+	if err := tc.CreateCollection(contextutil.WithTenantID(context.TODO(), tenantID), collInfo, ts); err != nil {
 		t.Errorf("error was not expected while creating collection: %s", err)
 	}
 
@@ -206,28 +195,6 @@ func TestCreateCollection_RollbackOnFailure3(t *testing.T) {
 	}
 }
 
-func TestCreateCollection_RollbackOnFailure4(t *testing.T) {
-	mock, tc := getMock(t)
-	defer tc.DB.Close()
-
-	mock.ExpectBegin()
-	mock.ExpectExec("insert into collections").WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectExec("insert into field_schemas").WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectExec("insert into partitions").WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectExec("insert into dd_msg_send").WillReturnError(fmt.Errorf("insert error"))
-	mock.ExpectRollback()
-
-	// now we execute our method
-	if err := tc.CreateCollection(context.TODO(), collInfo, ts); err == nil {
-		t.Errorf("was expecting an error, but there was none")
-	}
-
-	// we make sure that all expectations were met
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Errorf("there were unfulfilled expectations: %s", err)
-	}
-}
-
 func TestGetCollectionByID(t *testing.T) {
 	mock, tc := getMock(t)
 	defer tc.DB.Close()
@@ -248,14 +215,12 @@ func TestGetCollectionByID(t *testing.T) {
 		[]string{"id", "tenant_id", "collection_id", "collection_name", "collection_alias", "description", "auto_id", "ts", "properties", "is_deleted",
 			"id", "partition_id", "partition_name", "partition_created_timestamp", "collection_id", "ts", "is_deleted", "created_at", "updated_at",
 			"id", "field_id", "field_name", "collection_id",
-			"id", "field_id", "collection_id", "index_id", "index_name", "index_params",
 		},
 	).AddRow([]driver.Value{1, tenantID, collID, collName, string(aliasesBytes), "", false, collTimestamp, "{}", false,
 		10, partID, partName, partCreatedTimestamp, collID, 433286016461963275, false, time.Now(), time.Now(),
-		1000, fieldID, fieldName, collID,
-		1000, fieldID, collID, indexID, indexName, nil}...)
-	mock.ExpectQuery(sqlSelectSql).WithArgs(collID, ts).WillReturnRows(rows)
-	res, err := tc.GetCollectionByID(context.TODO(), collID, ts)
+		1000, fieldID, fieldName, collID}...)
+	mock.ExpectQuery(sqlSelectSql).WithArgs(collID, ts, tenantID).WillReturnRows(rows)
+	res, err := tc.GetCollectionByID(contextutil.WithTenantID(context.TODO(), tenantID), collID, ts)
 	if err != nil {
 		t.Fatalf("unexpected error:%s", err)
 	}
@@ -303,7 +268,7 @@ func TestGetCollectionIDByName(t *testing.T) {
 		[]string{"collection_id"},
 	).AddRow([]driver.Value{collID}...)
 	mock.ExpectQuery(sqlSelectSql).WillReturnRows(rows)
-	collectionID, err := tc.GetCollectionIDByName(context.TODO(), collName, ts)
+	collectionID, err := tc.GetCollectionIDByName(contextutil.WithTenantID(context.TODO(), tenantID), collName, ts)
 	if err != nil {
 		t.Fatalf("unexpected error:%s", err)
 	}
@@ -311,10 +276,6 @@ func TestGetCollectionIDByName(t *testing.T) {
 	if collectionID != collID {
 		t.Fatalf("unexpected collection_id:%d", collectionID)
 	}
-}
-
-func TestGetCollectionByName(t *testing.T) {
-
 }
 
 func TestListCollections(t *testing.T) {
@@ -341,7 +302,7 @@ func TestListCollections(t *testing.T) {
 		10, partID, partName, partCreatedTimestamp, collID, 433286016461963275, false, time.Now(), time.Now(),
 		1000, fieldID, fieldName}...)
 	mock.ExpectQuery(sqlSelectSql).WillReturnRows(rows)
-	res, err := tc.ListCollections(context.TODO(), ts)
+	res, err := tc.ListCollections(contextutil.WithTenantID(context.TODO(), tenantID), ts)
 	if err != nil {
 		t.Fatalf("unexpected error:%s", err)
 	}
@@ -395,7 +356,7 @@ func TestCollectionExists(t *testing.T) {
 		[]string{"tenant_id", "collection_id", "collection_name", "ts"},
 	).AddRow([]driver.Value{tenantID, collID, collName, ts}...)
 	mock.ExpectQuery(sqlSelectSql).WillReturnRows(rows)
-	b = tc.CollectionExists(context.TODO(), collID, ts)
+	b = tc.CollectionExists(contextutil.WithTenantID(context.TODO(), tenantID), collID, ts)
 	if !b {
 		t.Fatalf("unexpected result:%t", b)
 	}
@@ -405,28 +366,16 @@ func TestDropCollection(t *testing.T) {
 	mock, tc := getMock(t)
 	defer tc.DB.Close()
 
-	ddOp, _ := metastore.ToDdOperation(&internalpb.CreateCollectionRequest{
-		CollectionName: collName,
-		PartitionName:  partName,
-		CollectionID:   collID,
-		PartitionID:    partID,
-	}, "DropCollection")
-	meta := map[string]interface{}{}
-	meta[metastore.DDMsgSendPrefix] = false
-	meta[metastore.DDOperationPrefix] = ddOp
-	collInfo.Extra = meta
-
 	mock.ExpectBegin()
 	mock.ExpectExec("update collections").WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("update partitions").WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("update field_schemas").WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("update indexes").WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("update segment_indexes").WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec("insert into dd_msg_send").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 
 	// now we execute our method
-	if err := tc.DropCollection(context.TODO(), collInfo, ts); err != nil {
+	if err := tc.DropCollection(contextutil.WithTenantID(context.TODO(), tenantID), collInfo, ts); err != nil {
 		t.Errorf("error was not expected while dropping collection: %s", err)
 	}
 
@@ -573,55 +522,11 @@ func TestDropCollection_RollbackOnFailure5(t *testing.T) {
 	}
 }
 
-func TestDropCollection_RollbackOnFailure6(t *testing.T) {
-	mock, tc := getMock(t)
-	defer tc.DB.Close()
-
-	mock.ExpectBegin()
-	mock.ExpectExec("update collections").WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec("update partitions").WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec("update field_schemas").WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec("update indexes").WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec("update segment_indexes").WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec("insert into dd_msg_send").WillReturnError(fmt.Errorf("insert error"))
-	mock.ExpectRollback()
-	// now we execute our method
-	if err := tc.DropCollection(context.TODO(), collInfo, ts); err == nil {
-		t.Errorf("was expecting an error, but there was none")
-	}
-
-	errMsg := "get sql RowsAffected failed"
-	mock.ExpectBegin()
-	mock.ExpectExec("update collections").WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec("update partitions").WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec("update field_schemas").WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec("update indexes").WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec("update segment_indexes").WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec("insert into dd_msg_send").WillReturnResult(sqlmock.NewErrorResult(errors.New(errMsg)))
-	mock.ExpectRollback()
-	// mock sql result error
-	err := tc.DropCollection(context.TODO(), collInfo, ts)
-	if !strings.Contains(err.Error(), errMsg) {
-		t.Fatalf("unexpected error:%s", err)
-	}
-}
-
 func TestCreatePartition(t *testing.T) {
 	mock, tc := getMock(t)
 	defer tc.DB.Close()
 
 	insertSql1 := "insert into partitions"
-	insertSql2 := "insert into dd_msg_send"
-	ddOp, _ := metastore.ToDdOperation(&internalpb.CreateCollectionRequest{
-		CollectionName: collName,
-		PartitionName:  partName,
-		CollectionID:   collID,
-		PartitionID:    partID,
-	}, "DropCollection")
-	meta := map[string]interface{}{}
-	meta[metastore.DDMsgSendPrefix] = false
-	meta[metastore.DDOperationPrefix] = ddOp
-	collInfo.Extra = meta
 	partition := &model.Partition{
 		PartitionID:               partID,
 		PartitionName:             partName,
@@ -629,19 +534,14 @@ func TestCreatePartition(t *testing.T) {
 	}
 
 	// mock normal
-	mock.ExpectBegin()
 	mock.ExpectExec(insertSql1).WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectExec(insertSql2).WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectCommit()
-	if err := tc.CreatePartition(context.TODO(), collInfo, partition, ts); err != nil {
+	if err := tc.CreatePartition(contextutil.WithTenantID(context.TODO(), tenantID), collInfo, partition, ts); err != nil {
 		t.Errorf("error was not expected while creating collection: %s", err)
 	}
 
 	// mock update error
 	errMsg := "insert sql failed"
-	mock.ExpectBegin()
 	mock.ExpectExec(insertSql1).WillReturnError(errors.New(errMsg))
-	mock.ExpectRollback()
 	err := tc.CreatePartition(context.TODO(), collInfo, partition, ts)
 	if !strings.Contains(err.Error(), errMsg) {
 		t.Fatalf("unexpected error:%s", err)
@@ -653,32 +553,16 @@ func TestDropPartition(t *testing.T) {
 	defer tc.DB.Close()
 
 	updateSql := "update partitions"
-	insertSql := "insert into dd_msg_send"
-	ddOp, _ := metastore.ToDdOperation(&internalpb.CreateCollectionRequest{
-		CollectionName: collName,
-		PartitionName:  partName,
-		CollectionID:   collID,
-		PartitionID:    partID,
-	}, "DropCollection")
-	meta := map[string]interface{}{}
-	meta[metastore.DDMsgSendPrefix] = false
-	meta[metastore.DDOperationPrefix] = ddOp
-	collInfo.Extra = meta
 
 	// mock normal
-	mock.ExpectBegin()
 	mock.ExpectExec(updateSql).WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec(insertSql).WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectCommit()
-	if err := tc.DropPartition(context.TODO(), collInfo, partID, ts); err != nil {
+	if err := tc.DropPartition(contextutil.WithTenantID(context.TODO(), tenantID), collInfo, partID, ts); err != nil {
 		t.Errorf("error was not expected while dropping partition: %s", err)
 	}
 
 	// mock update error
 	errMsg := "update sql failed"
-	mock.ExpectBegin()
 	mock.ExpectExec(updateSql).WillReturnError(errors.New(errMsg))
-	mock.ExpectRollback()
 	err := tc.DropPartition(context.TODO(), collInfo, partID, ts)
 	if !strings.Contains(err.Error(), errMsg) {
 		t.Fatalf("unexpected error:%s", err)
@@ -686,9 +570,7 @@ func TestDropPartition(t *testing.T) {
 
 	// mock sql result error
 	errMsg = "get sql RowsAffected failed"
-	mock.ExpectBegin()
 	mock.ExpectExec(updateSql).WillReturnResult(sqlmock.NewErrorResult(errors.New(errMsg)))
-	mock.ExpectRollback()
 	err = tc.DropPartition(context.TODO(), collInfo, partID, ts)
 	if !strings.Contains(err.Error(), errMsg) {
 		t.Fatalf("unexpected error:%s", err)
@@ -720,7 +602,7 @@ func TestCreateIndex(t *testing.T) {
 	index.SegmentIndexes = segmentIndexes
 
 	// now we execute our method
-	if err := tc.CreateIndex(context.TODO(), nil, index); err != nil {
+	if err := tc.CreateIndex(contextutil.WithTenantID(context.TODO(), tenantID), nil, index); err != nil {
 		t.Errorf("error was not expected while creating collection: %s", err)
 	}
 
@@ -818,7 +700,7 @@ func TestAlterIndex(t *testing.T) {
 	mock.ExpectExec("update indexes").WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("update segment_indexes").WillReturnResult(sqlmock.NewResult(0, 3))
 	mock.ExpectCommit()
-	err = tc.AlterIndex(context.TODO(), oldIndex, newIndex)
+	err = tc.AlterIndex(contextutil.WithTenantID(context.TODO(), tenantID), oldIndex, newIndex)
 	if err != nil {
 		t.Fatalf("unexpected error:%s", err)
 	}
@@ -834,7 +716,7 @@ func TestDropIndex(t *testing.T) {
 	mock.ExpectCommit()
 
 	// now we execute our method
-	if err := tc.DropIndex(context.TODO(), nil, indexID, ts); err != nil {
+	if err := tc.DropIndex(contextutil.WithTenantID(context.TODO(), tenantID), nil, indexID, ts); err != nil {
 		t.Errorf("error was not expected while dropping collection: %s", err)
 	}
 
@@ -900,7 +782,7 @@ func TestListIndexesByCollectionID(t *testing.T) {
 
 	// mock select failure
 	mock.ExpectQuery(sqlSelectSql).WillReturnError(errors.New("select error"))
-	_, err := tc.listIndexesByCollectionID(collID)
+	_, err := tc.listIndexesByCollectionID(context.TODO(), collID)
 	if !strings.Contains(err.Error(), "select error") {
 		t.Fatalf("unexpected error:%s", err)
 	}
@@ -910,7 +792,7 @@ func TestListIndexesByCollectionID(t *testing.T) {
 		[]string{"id", "field_id", "collection_id", "index_id", "index_name", "index_params"},
 	).AddRow([]driver.Value{1, fieldID, collID, indexID, indexName, ""}...)
 	mock.ExpectQuery(sqlSelectSql).WillReturnRows(rows)
-	res, err := tc.listIndexesByCollectionID(collID)
+	res, err := tc.listIndexesByCollectionID(contextutil.WithTenantID(context.TODO(), tenantID), collID)
 	if err != nil {
 		t.Fatalf("unexpected error:%s", err)
 	}
@@ -950,7 +832,7 @@ func TestListIndexes(t *testing.T) {
 	).AddRow([]driver.Value{1, fieldID, collID, indexID, indexName, "",
 		10, partID, segID, fieldID, indexID, buildID, false, "", 100}...)
 	mock.ExpectQuery(sqlSelectSql).WillReturnRows(rows)
-	res, err := tc.ListIndexes(context.TODO())
+	res, err := tc.ListIndexes(contextutil.WithTenantID(context.TODO(), tenantID))
 	if err != nil {
 		t.Fatalf("unexpected error:%s", err)
 	}
@@ -998,9 +880,9 @@ func TestAddAlias(t *testing.T) {
 	}
 
 	// normal
-	mock.ExpectQuery("select").WithArgs(collID, ts).WillReturnRows(rows)
+	mock.ExpectQuery("select").WithArgs(collID, ts, tenantID).WillReturnRows(rows)
 	mock.ExpectExec("update collections").WillReturnResult(sqlmock.NewResult(0, 1))
-	err := tc.AddAlias(context.TODO(), coll, ts)
+	err := tc.AddAlias(contextutil.WithTenantID(context.TODO(), tenantID), coll, ts)
 	if err != nil {
 		t.Fatalf("unexpected error:%s", err)
 	}
@@ -1064,9 +946,9 @@ func TestDropAlias(t *testing.T) {
 	).AddRow([]driver.Value{1, tenantID, collID, collName, string(aliasesBytes)}...)
 
 	// normal
-	mock.ExpectQuery("select").WithArgs(collID, ts).WillReturnRows(rows)
+	mock.ExpectQuery("select").WithArgs(collID, ts, tenantID).WillReturnRows(rows)
 	mock.ExpectExec("update collections").WillReturnResult(sqlmock.NewResult(0, 1))
-	err := tc.DropAlias(context.TODO(), collID, aliasName1, ts)
+	err := tc.DropAlias(contextutil.WithTenantID(context.TODO(), tenantID), collID, aliasName1, ts)
 	if err != nil {
 		t.Fatalf("unexpected error:%s", err)
 	}
@@ -1112,7 +994,7 @@ func TestListAliases(t *testing.T) {
 		[]string{"collection_id", "collection_alias"},
 	).AddRow([]driver.Value{1, string(aliaesBytes)}...)
 	mock.ExpectQuery(sqlSelectSql).WillReturnRows(rows)
-	res, err := tc.ListAliases(context.TODO())
+	res, err := tc.ListAliases(contextutil.WithTenantID(context.TODO(), tenantID))
 	if err != nil {
 		t.Fatalf("unexpected error:%s", err)
 	}
@@ -1134,7 +1016,7 @@ func TestListAliases(t *testing.T) {
 		[]string{"collection_id", "collection_alias"},
 	).AddRow([]driver.Value{1, nil}...)
 	mock.ExpectQuery(sqlSelectSql).WillReturnRows(rows)
-	res, err = tc.ListAliases(context.TODO())
+	res, err = tc.ListAliases(contextutil.WithTenantID(context.TODO(), tenantID))
 	if err != nil {
 		t.Fatalf("unexpected error:%s", err)
 	}
@@ -1144,7 +1026,7 @@ func TestListAliases(t *testing.T) {
 		[]string{"collection_id", "collection_alias"},
 	).AddRow([]driver.Value{1, ""}...)
 	mock.ExpectQuery(sqlSelectSql).WillReturnRows(rows)
-	res, err = tc.ListAliases(context.TODO())
+	res, err = tc.ListAliases(contextutil.WithTenantID(context.TODO(), tenantID))
 	if err != nil {
 		t.Fatalf("unexpected error:%s", err)
 	}
@@ -1167,8 +1049,8 @@ func TestGetCredential(t *testing.T) {
 	rows := sqlmock.NewRows(
 		[]string{"tenant_id", "username", "encrypted_password", "is_super", "is_deleted"},
 	).AddRow([]driver.Value{tenantID, "Alice", "$2a$10$3H9DLiHyPxJ29bMWRNyueOrGkbzJfE3BAR159ju3UetytAoKk7Ne2", false, false}...)
-	mock.ExpectQuery(sqlSelectSql).WithArgs("Alice").WillReturnRows(rows)
-	credential, err := tc.GetCredential(context.TODO(), "Alice")
+	mock.ExpectQuery(sqlSelectSql).WithArgs("Alice", tenantID).WillReturnRows(rows)
+	credential, err := tc.GetCredential(contextutil.WithTenantID(context.TODO(), tenantID), "Alice")
 	if err != nil {
 		t.Fatalf("unexpected error:%s", err)
 	}
@@ -1198,7 +1080,7 @@ func TestCreateCredential(t *testing.T) {
 
 	// now we execute our request
 	mock.ExpectExec("insert into credential_users").WillReturnResult(sqlmock.NewResult(1, 1))
-	err = tc.CreateCredential(context.TODO(), credential)
+	err = tc.CreateCredential(contextutil.WithTenantID(context.TODO(), tenantID), credential)
 	if err != nil {
 		t.Fatalf("unexpected error:%s", err)
 	}
@@ -1220,7 +1102,7 @@ func TestDropCredential(t *testing.T) {
 
 	// now we execute our request
 	mock.ExpectExec("update credential_users").WillReturnResult(sqlmock.NewResult(1, 1))
-	err = tc.DropCredential(context.TODO(), "Alice")
+	err = tc.DropCredential(contextutil.WithTenantID(context.TODO(), tenantID), "Alice")
 	if err != nil {
 		t.Fatalf("unexpected error:%s", err)
 	}
@@ -1251,7 +1133,7 @@ func TestListCredentials(t *testing.T) {
 		[]string{"username"},
 	).AddRow("Alice").AddRow("Bob")
 	mock.ExpectQuery(sqlSelectSql).WillReturnRows(rows)
-	res, err := tc.ListCredentials(context.TODO())
+	res, err := tc.ListCredentials(contextutil.WithTenantID(context.TODO(), tenantID))
 	if err != nil {
 		t.Fatalf("unexpected error:%s", err)
 	}

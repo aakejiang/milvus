@@ -35,6 +35,7 @@ import (
 	"github.com/milvus-io/milvus/internal/proto/milvuspb"
 	"github.com/milvus-io/milvus/internal/proto/schemapb"
 	"github.com/milvus-io/milvus/internal/util"
+	"github.com/milvus-io/milvus/internal/util/contextutil"
 	"github.com/milvus-io/milvus/internal/util/typeutil"
 	"go.uber.org/zap"
 )
@@ -105,7 +106,7 @@ func NewMetaTable(ctx context.Context, txn kv.TxnKV, snap kv.SnapShotKV) (*MetaT
 		return nil, err
 	}
 	mt := &MetaTable{
-		ctx:       ctx,
+		ctx:       contextutil.WithTenantID(ctx, Params.CommonCfg.ClusterName),
 		txn:       txn,
 		snapshot:  snap,
 		catalog:   catalog,

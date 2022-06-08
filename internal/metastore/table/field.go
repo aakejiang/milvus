@@ -9,6 +9,7 @@ import (
 
 type Field struct {
 	Id           int64              `db:"id"`
+	TenantID     *string            `db:"tenant_id"`
 	FieldID      int64              `db:"field_id"`
 	FieldName    string             `db:"field_name"`
 	IsPrimaryKey bool               `db:"is_primary_key"`

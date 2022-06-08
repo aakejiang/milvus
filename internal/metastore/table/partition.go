@@ -8,6 +8,7 @@ import (
 
 type Partition struct {
 	Id                        int64              `db:"id"`
+	TenantID                  *string            `db:"tenant_id"`
 	PartitionID               int64              `db:"partition_id"`
 	PartitionName             string             `db:"partition_name"`
 	PartitionCreatedTimestamp uint64             `db:"partition_created_timestamp"`
