@@ -479,7 +479,7 @@ func (tc *TableCatalog) CreateIndex(ctx context.Context, col *model.Collection, 
 
 func (tc *TableCatalog) AlterIndex(ctx context.Context, oldIndex *model.Index, newIndex *model.Index) error {
 	// no need updating table indexes
-	sqlStr := "update segment_indexes set build_id=?, enable_index=?, index_file_paths=?, index_size=? where collection_id=? and segment_id=? and field_id=? and index_id=?"
+	sqlStr := "update segment_indexes set partition_id=?, build_id=?, enable_index=?, index_file_paths=?, index_size=? where collection_id=? and segment_id=? and field_id=? and index_id=?"
 	tenantID := contextutil.TenantID(ctx)
 	for _, segIndex := range newIndex.SegmentIndexes {
 		indexFilePaths, err := json.Marshal(segIndex.IndexFilePaths)
@@ -488,7 +488,7 @@ func (tc *TableCatalog) AlterIndex(ctx context.Context, oldIndex *model.Index, n
 			continue
 		}
 		indexFilePathsStr := string(indexFilePaths)
-		args := []interface{}{segIndex.BuildID, segIndex.EnableIndex, indexFilePathsStr, segIndex.IndexSize, oldIndex.CollectionID, segIndex.SegmentID, oldIndex.FieldID, oldIndex.IndexID}
+		args := []interface{}{segIndex.PartitionID, segIndex.BuildID, segIndex.EnableIndex, indexFilePathsStr, segIndex.IndexSize, oldIndex.CollectionID, segIndex.SegmentID, oldIndex.FieldID, oldIndex.IndexID}
 		if tenantID != "" {
 			sqlStr = sqlStr + " and tenant_id=?"
 			args = append(args, tenantID)
