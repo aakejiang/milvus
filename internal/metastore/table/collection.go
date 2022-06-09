@@ -8,18 +8,17 @@ import (
 )
 
 type Collection struct {
-	Id              int64              `db:"id"`
-	TenantID        *string            `db:"tenant_id"`
-	CollectionID    int64              `db:"collection_id"`
-	CollectionName  string             `db:"collection_name"`
-	CollectionAlias *string            `db:"collection_alias"`
-	Description     *string            `db:"description"`
-	AutoID          bool               `db:"auto_id"`
-	Ts              typeutil.Timestamp `db:"ts"`
-	Properties      *string            `db:"properties"`
-	IsDeleted       bool               `db:"is_deleted"`
-	CreatedAt       time.Time          `db:"created_at"`
-	UpdatedAt       time.Time          `db:"updated_at"`
+	Id             int64              `db:"id"`
+	TenantID       *string            `db:"tenant_id"`
+	CollectionID   int64              `db:"collection_id"`
+	CollectionName string             `db:"collection_name"`
+	Description    *string            `db:"description"`
+	AutoID         bool               `db:"auto_id"`
+	Ts             typeutil.Timestamp `db:"ts"`
+	Properties     *string            `db:"properties"`
+	IsDeleted      bool               `db:"is_deleted"`
+	CreatedAt      time.Time          `db:"created_at"`
+	UpdatedAt      time.Time          `db:"updated_at"`
 }
 
 type CollProperties struct {

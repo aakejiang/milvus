@@ -9,7 +9,6 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
 	"github.com/milvus-io/milvus/internal/log"
-	"github.com/milvus-io/milvus/internal/metastore"
 	"github.com/milvus-io/milvus/internal/metastore/model"
 	"github.com/milvus-io/milvus/internal/util/contextutil"
 	"github.com/milvus-io/milvus/internal/util/typeutil"
@@ -32,13 +31,7 @@ func (tc *TableCatalog) CreateCollection(ctx context.Context, collection *model.
 	tenantID := contextutil.TenantID(ctx)
 	return WithTransaction(tc.DB, func(tx Transaction) error {
 		// sql 1
-		sqlStr1 := "insert into collections(tenant_id, collection_id, collection_name, collection_alias, description, auto_id, ts, properties) values (?,?,?,?,?,?,?,?)"
-		aliasesBytes, err := json.Marshal(collection.Aliases)
-		aliasesStr := string(aliasesBytes)
-		if err != nil {
-			log.Error("marshal alias failed", zap.Error(err))
-			return err
-		}
+		sqlStr1 := "insert into collections(tenant_id, collection_id, collection_name, description, auto_id, ts, properties) values (?,?,?,?,?,?,?)"
 		properties := ConvertToCollectionProperties(collection)
 		propertiesBytes, err := json.Marshal(properties)
 		propertiesStr := string(propertiesBytes)
@@ -46,7 +39,7 @@ func (tc *TableCatalog) CreateCollection(ctx context.Context, collection *model.
 			log.Error("marshal collection properties error", zap.Error(err))
 			return err
 		}
-		_, err = tx.Exec(sqlStr1, tenantID, collection.CollectionID, collection.Name, aliasesStr, collection.Description, collection.AutoID, ts, propertiesStr)
+		_, err = tx.Exec(sqlStr1, tenantID, collection.CollectionID, collection.Name, collection.Description, collection.AutoID, ts, propertiesStr)
 		if err != nil {
 			log.Error("insert collection failed", zap.Error(err))
 			return err
@@ -345,6 +338,25 @@ func (tc *TableCatalog) DropCollection(ctx context.Context, collectionInfo *mode
 		}
 		log.Debug("table segment_indexes RowsAffected", zap.Any("rows", n))
 
+		// sql 6
+		sqlStr6 := "update collection_aliases set is_deleted=true where collection_id=? and ts=?"
+		args6 := []interface{}{collectionInfo.CollectionID, ts}
+		if tenantID != "" {
+			sqlStr6 = sqlStr6 + " and tenant_id=?"
+			args6 = append(args6, tenantID)
+		}
+		rs, err = tx.Exec(sqlStr6, args6...)
+		if err != nil {
+			log.Error("delete collection alias failed", zap.Error(err))
+			return err
+		}
+		n, err = rs.RowsAffected()
+		if err != nil {
+			log.Error("get RowsAffected failed", zap.Error(err))
+			return err
+		}
+		log.Debug("table collection_aliases RowsAffected", zap.Any("rows", n))
+
 		return err
 	})
 }
@@ -466,6 +478,7 @@ func (tc *TableCatalog) CreateIndex(ctx context.Context, col *model.Collection, 
 }
 
 func (tc *TableCatalog) AlterIndex(ctx context.Context, oldIndex *model.Index, newIndex *model.Index) error {
+	// no need updating table indexes
 	sqlStr := "update segment_indexes set build_id=?, enable_index=?, index_file_paths=?, index_size=? where collection_id=? and segment_id=? and field_id=? and index_id=?"
 	tenantID := contextutil.TenantID(ctx)
 	for _, segIndex := range newIndex.SegmentIndexes {
@@ -595,32 +608,18 @@ func (tc *TableCatalog) ListIndexes(ctx context.Context) ([]*model.Index, error)
 	return indexes, nil
 }
 
-func (tc *TableCatalog) AddAlias(ctx context.Context, collection *model.Collection, ts typeutil.Timestamp) error {
-	coll, err := tc.GetCollectionByID(ctx, collection.CollectionID, ts)
-	if err != nil {
-		log.Error("get collection by ID failed", zap.Int64("collID", collection.CollectionID), zap.Uint64("ts", ts))
-		return err
-	}
-	presentAlias := coll.Aliases
-	newAlias := collection.Aliases
-	aliasSlice := metastore.ConvertInterfaceSlice(typeutil.SliceRemoveDuplicate(append(presentAlias, newAlias...)))
-	aliasesBytes, err := json.Marshal(aliasSlice)
-	aliasesStr := string(aliasesBytes)
-	if err != nil {
-		log.Error("marshal alias failed", zap.Error(err))
-		return err
-	}
-	// sql 1
-	sqlStr1 := "update collections set collection_alias=? where collection_id=? and ts=?"
-	args1 := []interface{}{aliasesStr, collection.CollectionID, ts}
+func (tc *TableCatalog) AddAlias(ctx context.Context, coll *model.CollectionAlias, ts typeutil.Timestamp) error {
+	sqlStr := "insert into collection_aliases(tenant_id, collection_id, collection_alias, ts) values (:tenant_id, :collection_id, :collection_alias, :ts)"
 	tenantID := contextutil.TenantID(ctx)
-	if tenantID != "" {
-		sqlStr1 = sqlStr1 + " and tenant_id=?"
-		args1 = append(args1, tenantID)
+	collAlias := CollectionAlias{
+		TenantID:        &tenantID,
+		CollectionID:    coll.CollectionID,
+		CollectionAlias: coll.CollectionAlias,
+		Ts:              ts,
 	}
-	rs, err := tc.DB.Exec(sqlStr1, args1...)
+	rs, err := tc.DB.NamedExec(sqlStr, collAlias)
 	if err != nil {
-		log.Error("add alias failed", zap.Error(err))
+		log.Error("insert collection alias failed", zap.Error(err))
 		return err
 	}
 	n, err := rs.RowsAffected()
@@ -628,40 +627,22 @@ func (tc *TableCatalog) AddAlias(ctx context.Context, collection *model.Collecti
 		log.Error("get RowsAffected failed", zap.Error(err))
 		return err
 	}
-	log.Debug("table collections RowsAffected", zap.Any("rows", n))
+	log.Debug("table collection_aliases RowsAffected", zap.Any("rows", n))
 
 	return nil
 }
 
 func (tc *TableCatalog) DropAlias(ctx context.Context, collectionID typeutil.UniqueID, alias string, ts typeutil.Timestamp) error {
-	coll, err := tc.GetCollectionByID(ctx, collectionID, ts)
-	if err != nil {
-		log.Error("get collection by ID failed", zap.Int64("collectionID", collectionID))
-		return err
-	}
-	presentAlias := coll.Aliases
-	for i, ele := range presentAlias {
-		if ele == alias {
-			presentAlias = append(presentAlias[:i], presentAlias[i+1:]...)
-		}
-	}
-	aliasesBytes, err := json.Marshal(presentAlias)
-	aliasesStr := string(aliasesBytes)
-	if err != nil {
-		log.Error("marshal alias failed", zap.Error(err))
-		return err
-	}
-	// sql 1
-	sqlStr1 := "update collections set collection_alias=? where collection_id=? and ts=?"
-	args1 := []interface{}{aliasesStr, collectionID, ts}
+	sqlStr := "update collection_aliases set is_deleted=true where collection_id=? and collection_alias=? and ts=?"
+	args := []interface{}{collectionID, alias, ts}
 	tenantID := contextutil.TenantID(ctx)
 	if tenantID != "" {
-		sqlStr1 = sqlStr1 + " and tenant_id=?"
-		args1 = append(args1, tenantID)
+		sqlStr = sqlStr + " and tenant_id=?"
+		args = append(args, tenantID)
 	}
-	rs, err := tc.DB.Exec(sqlStr1, args1...)
+	rs, err := tc.DB.Exec(sqlStr, args...)
 	if err != nil {
-		log.Error("drop alias failed", zap.Error(err))
+		log.Error("drop collection alias failed", zap.Error(err))
 		return err
 	}
 	n, err := rs.RowsAffected()
@@ -669,47 +650,35 @@ func (tc *TableCatalog) DropAlias(ctx context.Context, collectionID typeutil.Uni
 		log.Error("get RowsAffected failed", zap.Error(err))
 		return err
 	}
-	log.Debug("table collections RowsAffected", zap.Any("rows", n))
+	log.Debug("table collection_aliases RowsAffected", zap.Any("rows", n))
 
 	return nil
 }
 
 // ListAliases query collection ID and aliases only, other information are not needed
 func (tc *TableCatalog) ListAliases(ctx context.Context) ([]*model.Collection, error) {
-	sqlStr := "select collection_id, collection_alias from collections where is_deleted=false and collection_alias is not null and collection_alias!=''"
+	sqlStr := "select collection_id, collection_alias from collection_aliases where is_deleted=false"
 	args := []interface{}{}
 	tenantID := contextutil.TenantID(ctx)
 	if tenantID != "" {
 		sqlStr = sqlStr + " and tenant_id=?"
 		args = append(args, tenantID)
 	}
-	var colls []Collection
-	err := tc.DB.Select(&colls, sqlStr, args...)
+	var collAliases []CollectionAlias
+	err := tc.DB.Select(&collAliases, sqlStr, args...)
 	if err != nil {
 		log.Error("list collection alias failed", zap.Error(err))
 		return nil, err
 	}
 
-	var collAlias []*model.Collection
-	for _, coll := range colls {
-		var aliases []string
-		if coll.CollectionAlias == nil {
-			log.Warn("collection alias is nil")
-			continue
-		}
-		err = json.Unmarshal([]byte(*coll.CollectionAlias), &aliases)
-		if err != nil {
-			log.Error("unmarshal collection alias failed", zap.Error(err))
-			continue
-		}
-		for _, alias := range aliases {
-			collAlias = append(collAlias, &model.Collection{
-				CollectionID: coll.CollectionID,
-				Name:         alias,
-			})
-		}
+	var colls []*model.Collection
+	for _, record := range collAliases {
+		colls = append(colls, &model.Collection{
+			CollectionID: record.CollectionID,
+			Name:         record.CollectionAlias,
+		})
 	}
-	return collAlias, nil
+	return colls, nil
 }
 
 func (tc *TableCatalog) GetCredential(ctx context.Context, username string) (*model.Credential, error) {

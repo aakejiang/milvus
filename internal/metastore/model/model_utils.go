@@ -16,7 +16,6 @@ func CloneCollectionModel(coll Collection) *Collection {
 		ConsistencyLevel:     coll.ConsistencyLevel,
 		CreateTime:           coll.CreateTime,
 		StartPositions:       coll.StartPositions,
-		Aliases:              coll.Aliases,
 		Extra:                coll.Extra,
 	}
 }

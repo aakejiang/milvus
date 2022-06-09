@@ -372,6 +372,7 @@ func TestDropCollection(t *testing.T) {
 	mock.ExpectExec("update field_schemas").WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("update indexes").WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("update segment_indexes").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("update collection_aliases").WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
 	// now we execute our method
@@ -864,24 +865,16 @@ func TestAddAlias(t *testing.T) {
 	mock, tc := getMock(t)
 	defer tc.DB.Close()
 
-	rows := sqlmock.NewRows(
-		[]string{"id", "tenant_id", "collection_id", "collection_name", "collection_alias"},
-	).AddRow([]driver.Value{1, tenantID, collID, collName, nil}...)
-
-	coll := &model.Collection{
-		CollectionID: collID,
-		Aliases:      []string{aliasName1, aliasName2},
-	}
-
 	// normal
-	mock.ExpectQuery("select").WithArgs(collID, ts, tenantID).WillReturnRows(rows)
-	mock.ExpectExec("update collections").WillReturnResult(sqlmock.NewResult(0, 1))
-	err := tc.AddAlias(contextutil.WithTenantID(context.TODO(), tenantID), coll, ts)
+	mock.ExpectExec("insert into collection_aliases").WillReturnResult(sqlmock.NewResult(1, 1))
+
+	collAlias := &model.CollectionAlias{
+		CollectionID:    collID,
+		CollectionAlias: aliasName1,
+	}
+	err := tc.AddAlias(contextutil.WithTenantID(context.TODO(), tenantID), collAlias, ts)
 	if err != nil {
 		t.Fatalf("unexpected error:%s", err)
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Errorf("there were unfulfilled expectations: %s", err)
 	}
 }
 
@@ -889,20 +882,15 @@ func TestAddAlias_ReturnError(t *testing.T) {
 	mock, tc := getMock(t)
 	defer tc.DB.Close()
 
-	rows := sqlmock.NewRows(
-		[]string{"id", "tenant_id", "collection_id", "collection_name", "collection_alias"},
-	).AddRow([]driver.Value{1, tenantID, collID, collName, nil}...)
-
-	coll := &model.Collection{
-		CollectionID: collID,
-		Aliases:      []string{aliasName1, aliasName2},
-	}
-
 	// mock return error
-	mock.ExpectQuery("select").WithArgs(collID, ts).WillReturnRows(rows)
-	mock.ExpectExec("update collections").WillReturnError(errors.New("update error"))
-	err := tc.AddAlias(context.TODO(), coll, ts)
-	if !strings.Contains(err.Error(), "update error") {
+	mock.ExpectExec("insert into collection_aliases").WillReturnError(errors.New("insert error"))
+
+	collAlias := &model.CollectionAlias{
+		CollectionID:    collID,
+		CollectionAlias: aliasName1,
+	}
+	err := tc.AddAlias(context.TODO(), collAlias, ts)
+	if !strings.Contains(err.Error(), "insert error") {
 		t.Fatalf("unexpected error:%s", err)
 	}
 }
@@ -911,20 +899,15 @@ func TestAddAlias_ErrorResult(t *testing.T) {
 	mock, tc := getMock(t)
 	defer tc.DB.Close()
 
-	rows := sqlmock.NewRows(
-		[]string{"id", "tenant_id", "collection_id", "collection_name", "collection_alias"},
-	).AddRow([]driver.Value{1, tenantID, collID, collName, nil}...)
-
-	coll := &model.Collection{
-		CollectionID: collID,
-		Aliases:      []string{aliasName1, aliasName2},
-	}
-
 	// mock error result
 	errMsg := "get sql RowsAffected failed"
-	mock.ExpectQuery("select").WithArgs(collID, ts).WillReturnRows(rows)
-	mock.ExpectExec("update collections").WillReturnResult(sqlmock.NewErrorResult(errors.New(errMsg)))
-	err := tc.AddAlias(context.TODO(), coll, ts)
+	mock.ExpectExec("insert into collection_aliases").WillReturnResult(sqlmock.NewErrorResult(errors.New(errMsg)))
+
+	collAlias := &model.CollectionAlias{
+		CollectionID:    collID,
+		CollectionAlias: aliasName1,
+	}
+	err := tc.AddAlias(context.TODO(), collAlias, ts)
 	if !strings.Contains(err.Error(), errMsg) {
 		t.Fatalf("unexpected error:%s", err)
 	}
@@ -934,14 +917,8 @@ func TestDropAlias(t *testing.T) {
 	mock, tc := getMock(t)
 	defer tc.DB.Close()
 
-	aliasesBytes, _ := json.Marshal([]string{aliasName1, aliasName2})
-	rows := sqlmock.NewRows(
-		[]string{"id", "tenant_id", "collection_id", "collection_name", "collection_alias"},
-	).AddRow([]driver.Value{1, tenantID, collID, collName, string(aliasesBytes)}...)
-
 	// normal
-	mock.ExpectQuery("select").WithArgs(collID, ts, tenantID).WillReturnRows(rows)
-	mock.ExpectExec("update collections").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("update collection_aliases").WillReturnResult(sqlmock.NewResult(0, 1))
 	err := tc.DropAlias(contextutil.WithTenantID(context.TODO(), tenantID), collID, aliasName1, ts)
 	if err != nil {
 		t.Fatalf("unexpected error:%s", err)
@@ -955,14 +932,8 @@ func TestDropAlias_ERROR(t *testing.T) {
 	mock, tc := getMock(t)
 	defer tc.DB.Close()
 
-	aliasesBytes, _ := json.Marshal([]string{aliasName1, aliasName2})
-	rows := sqlmock.NewRows(
-		[]string{"id", "tenant_id", "collection_id", "collection_name", "collection_alias"},
-	).AddRow([]driver.Value{1, tenantID, collID, collName, string(aliasesBytes)}...)
-
 	// mock error
-	mock.ExpectQuery("select").WithArgs(collID, ts).WillReturnRows(rows)
-	mock.ExpectExec("update collections").WillReturnError(errors.New("update error"))
+	mock.ExpectExec("update collection_aliases").WillReturnError(errors.New("update error"))
 	err := tc.DropAlias(context.TODO(), collID, aliasName1, ts)
 	if !strings.Contains(err.Error(), "update error") {
 		t.Fatalf("unexpected error:%s", err)
@@ -983,10 +954,9 @@ func TestListAliases(t *testing.T) {
 	}
 
 	// mock select normal
-	aliaesBytes, _ := json.Marshal([]string{aliasName1, aliasName2})
 	rows := sqlmock.NewRows(
 		[]string{"collection_id", "collection_alias"},
-	).AddRow([]driver.Value{1, string(aliaesBytes)}...)
+	).AddRow(collID, aliasName1).AddRow(collID, aliasName2)
 	mock.ExpectQuery(sqlSelectSql).WillReturnRows(rows)
 	res, err := tc.ListAliases(contextutil.WithTenantID(context.TODO(), tenantID))
 	if err != nil {
@@ -1003,16 +973,6 @@ func TestListAliases(t *testing.T) {
 		if coll.Name != aliasName1 && coll.Name != aliasName2 {
 			t.Fatalf("unexpected field_id:%s", coll.Name)
 		}
-	}
-
-	// mock alias is nil
-	rows = sqlmock.NewRows(
-		[]string{"collection_id", "collection_alias"},
-	).AddRow([]driver.Value{1, nil}...)
-	mock.ExpectQuery(sqlSelectSql).WillReturnRows(rows)
-	res, err = tc.ListAliases(contextutil.WithTenantID(context.TODO(), tenantID))
-	if err != nil {
-		t.Fatalf("unexpected error:%s", err)
 	}
 
 	// mock alias is empty

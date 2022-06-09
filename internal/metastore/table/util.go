@@ -24,13 +24,6 @@ func ConvertToCollectionProperties(collection *model.Collection) *CollProperties
 // model <---> db
 
 func ConvertCollectionDBToModel(coll *Collection, partition *Partition, field *Field, index *Index) *model.Collection {
-	var aliases []string
-	if coll.CollectionAlias != nil {
-		err := json.Unmarshal([]byte(*coll.CollectionAlias), &aliases)
-		if err != nil {
-			log.Error("unmarshal collection alias failed", zap.Error(err))
-		}
-	}
 	properties := CollProperties{}
 	if coll.Properties != nil {
 		err := json.Unmarshal([]byte(*coll.Properties), &properties)
@@ -62,7 +55,6 @@ func ConvertCollectionDBToModel(coll *Collection, partition *Partition, field *F
 		StartPositions:       properties.StartPositions,
 		ConsistencyLevel:     properties.ConsistencyLevel,
 		CreateTime:           coll.Ts,
-		Aliases:              aliases,
 	}
 }
 

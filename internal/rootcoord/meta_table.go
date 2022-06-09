@@ -1022,9 +1022,9 @@ func (mt *MetaTable) AddAlias(collectionAlias string, collectionName string, ts 
 	}
 	mt.collAlias2ID[collectionAlias] = id
 
-	coll := &model.Collection{
-		CollectionID: id,
-		Aliases:      []string{collectionAlias},
+	coll := &model.CollectionAlias{
+		CollectionID:    id,
+		CollectionAlias: collectionAlias,
 	}
 	return mt.catalog.AddAlias(mt.ctx, coll, ts)
 }
@@ -1056,9 +1056,9 @@ func (mt *MetaTable) AlterAlias(collectionAlias string, collectionName string, t
 	}
 	mt.collAlias2ID[collectionAlias] = id
 
-	coll := &model.Collection{
-		CollectionID: id,
-		Aliases:      []string{collectionAlias},
+	coll := &model.CollectionAlias{
+		CollectionID:    id,
+		CollectionAlias: collectionAlias,
 	}
 	return mt.catalog.AddAlias(mt.ctx, coll, ts)
 }
