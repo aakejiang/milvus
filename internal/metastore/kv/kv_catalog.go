@@ -320,7 +320,7 @@ func (kc *Catalog) DropPartition(ctx context.Context, collectionInfo *model.Coll
 	return nil
 }
 
-func (kc *Catalog) DropIndex(ctx context.Context, collectionInfo *model.Collection, dropIdxID typeutil.UniqueID, ts typeutil.Timestamp) error {
+func (kc *Catalog) DropIndex(ctx context.Context, collectionInfo *model.Collection, dropIdxID typeutil.UniqueID) error {
 	collMeta := ConvertToCollectionPB(collectionInfo)
 
 	k := path.Join(metastore.CollectionMetaPrefix, strconv.FormatInt(collectionInfo.CollectionID, 10))
@@ -418,8 +418,8 @@ func (kc *Catalog) ListCollections(ctx context.Context, ts typeutil.Timestamp) (
 	return colls, nil
 }
 
-func (kc *Catalog) ListAliases(ctx context.Context) ([]*model.Collection, error) {
-	_, values, err := kc.Snapshot.LoadWithPrefix(metastore.CollectionAliasMetaPrefix, 0)
+func (kc *Catalog) ListAliases(ctx context.Context, ts typeutil.Timestamp) ([]*model.Collection, error) {
+	_, values, err := kc.Snapshot.LoadWithPrefix(metastore.CollectionAliasMetaPrefix, ts)
 	if err != nil {
 		log.Error("get aliases meta fail", zap.String("prefix", metastore.CollectionAliasMetaPrefix), zap.Error(err))
 		return nil, err

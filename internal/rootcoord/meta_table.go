@@ -169,7 +169,7 @@ func (mt *MetaTable) reloadFromKV() error {
 		mt.indexID2Meta[index.IndexID] = *index
 	}
 
-	collAliases, err := mt.catalog.ListAliases(mt.ctx)
+	collAliases, err := mt.catalog.ListAliases(mt.ctx, 0)
 	if err != nil {
 		return err
 	}
@@ -648,7 +648,7 @@ func (mt *MetaTable) DropIndex(collName, fieldName, indexName string) (typeutil.
 	}
 
 	// update metastore
-	err = mt.catalog.DropIndex(mt.ctx, &col, dropIdxID, 0)
+	err = mt.catalog.DropIndex(mt.ctx, &col, dropIdxID)
 	if err != nil {
 		return 0, false, err
 	}

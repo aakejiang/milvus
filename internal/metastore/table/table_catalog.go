@@ -25,7 +25,8 @@ field_schemas.field_id, field_schemas.field_name, field_schemas.is_primary_key, 
 partitions.partition_id, partitions.partition_name, partitions.partition_created_timestamp
 from collections
 left join field_schemas on collections.collection_id = field_schemas.collection_id and collections.ts = field_schemas.ts and field_schemas.is_deleted=false
-left join partitions on collections.collection_id = partitions.collection_id and collections.ts = partitions.ts and partitions.is_deleted=false`
+left join partitions on collections.collection_id = partitions.collection_id and collections.ts = partitions.ts and partitions.is_deleted=false
+where collections.is_deleted=false`
 
 func (tc *TableCatalog) CreateCollection(ctx context.Context, collection *model.Collection, ts typeutil.Timestamp) error {
 	tenantID := contextutil.TenantID(ctx)
@@ -109,19 +110,35 @@ func (tc *TableCatalog) CreateCollection(ctx context.Context, collection *model.
 }
 
 func (tc *TableCatalog) GetCollectionByID(ctx context.Context, collectionID typeutil.UniqueID, ts typeutil.Timestamp) (*model.Collection, error) {
+	// For time travel (ts > 0), queryTs is the largest timestamp that less than or equal to @param ts (queryTs <= ts)
+	// otherwise if ts = 0, queryTs is also 0
+	var queryTs typeutil.Timestamp
+	if ts > 0 {
+		sqlStr1 := "select ts, is_deleted from collections where collection_id=? and ts>0 and ts<=? order by ts desc limit 1"
+		var tsDeletedPair struct {
+			Ts        typeutil.Timestamp `db:"ts"`
+			IsDeleted bool               `db:"is_deleted"`
+		}
+		err := tc.DB.Get(&tsDeletedPair, sqlStr1, collectionID, ts)
+		if err != nil {
+			log.Error("get collection ts failed", zap.Int64("collID", collectionID), zap.Uint64("ts", ts), zap.Error(err))
+			return nil, err
+		}
+		if tsDeletedPair.IsDeleted {
+			return &model.Collection{}, nil
+		}
+		queryTs = tsDeletedPair.Ts
+	} else {
+		queryTs = 0
+	}
+
 	var result []struct {
 		Collection
 		Partition
 		Field
 	}
-	sqlStr := sqlJoin + " where collections.collection_id=?"
-	args := []interface{}{collectionID}
-	if ts > 0 {
-		sqlStr = sqlStr + " and collections.ts<=?"
-		args = append(args, ts)
-	} else {
-		sqlStr = sqlStr + " and collections.is_deleted=false"
-	}
+	sqlStr := sqlJoin + " and collections.collection_id=? and collections.ts=?"
+	args := []interface{}{collectionID, queryTs}
 	tenantID := contextutil.TenantID(ctx)
 	if tenantID != "" {
 		sqlStr = sqlStr + " and collections.tenant_id=?"
@@ -148,64 +165,92 @@ func (tc *TableCatalog) GetCollectionByID(ctx context.Context, collectionID type
 	return collMap[collectionID], nil
 }
 
-func (tc *TableCatalog) GetCollectionIDByName(ctx context.Context, collectionName string, ts typeutil.Timestamp) (typeutil.UniqueID, error) {
-	sqlStr := "select collection_id from collections where collection_name=?"
-	var collID typeutil.UniqueID
+// GetCollectionIDByName since collection name will not change for different ts
+func (tc *TableCatalog) GetCollectionIDByName(ctx context.Context, collectionName string) (typeutil.UniqueID, error) {
+	sqlStr := "select collection_id from collections where collection_name=? limit 1"
 	args := []interface{}{collectionName}
-	if ts > 0 {
-		sqlStr = sqlStr + " and ts<=? order by ts desc limit 1"
-		args = append(args, ts)
-	} else {
-		sqlStr = sqlStr + " and is_deleted=false"
-	}
 	tenantID := contextutil.TenantID(ctx)
 	if tenantID != "" {
 		sqlStr = sqlStr + " and tenant_id=?"
 		args = append(args, tenantID)
 	}
+
+	var collID typeutil.UniqueID
 	err := tc.DB.Get(&collID, sqlStr, args...)
 	if err != nil {
-		log.Error("get collection id by name failed", zap.String("collName", collectionName), zap.Uint64("ts", ts), zap.Error(err))
+		log.Error("get collection id by name failed", zap.String("collName", collectionName), zap.Error(err))
 		return 0, err
 	}
+
 	return collID, nil
 }
 
 func (tc *TableCatalog) GetCollectionByName(ctx context.Context, collectionName string, ts typeutil.Timestamp) (*model.Collection, error) {
-	collectionID, err := tc.GetCollectionIDByName(ctx, collectionName, ts)
+	// Since collection name will not change for different ts
+	collectionID, err := tc.GetCollectionIDByName(ctx, collectionName)
 	if err != nil {
-		log.Error("get collection id by name failed", zap.Int64("collID", collectionID), zap.Uint64("ts", ts), zap.Error(err))
 		return nil, err
 	}
+
 	return tc.GetCollectionByID(ctx, collectionID, ts)
 }
 
+// ListCollections For time travel (ts > 0), find only one record respectively for each collection no matter `is_deleted` is true or false
+// i.e. there are 3 collections in total,
+// [collection1, t1, is_deleted=true]
+// [collection2, t2, is_deleted=false]
+// [collection3, t3, is_deleted=false]
+// t1, t2, t3 are the largest timestamp that less than or equal to @param ts
+// the final result will only return collection2 and collection3 since collection1 is deleted
 func (tc *TableCatalog) ListCollections(ctx context.Context, ts typeutil.Timestamp) (map[string]*model.Collection, error) {
-	sqlStr := sqlJoin
-	args := []interface{}{}
-	if ts > 0 {
-		sqlStr = sqlStr + " where collections.ts<=?"
-		args = append(args, ts)
-	} else {
-		sqlStr = sqlStr + " where collections.is_deleted=false"
+	// 1. find each collection with latest ts
+	sqlStr1 := "select collection_id, max(ts) ts from collections where ts<=? group by collection_id"
+	var inPairs []struct {
+		CollectionID string             `db:"collection_id"`
+		Ts           typeutil.Timestamp `db:"ts"`
 	}
+	err := tc.DB.Select(&inPairs, sqlStr1, ts)
+	if err != nil {
+		log.Error("list latest ts and corresponding collectionID in collections failed", zap.Uint64("ts", ts), zap.Error(err))
+		return nil, err
+	}
+	if len(inPairs) == 0 {
+		return map[string]*model.Collection{}, nil
+	}
+
+	// 2. select with in clause
+	inPlaceHolders := sqlInPlaceholders(len(inPairs))
+	sqlStr2 := fmt.Sprintf(sqlJoin+" and (collections.collection_id, collections.ts) in (%s)", inPlaceHolders)
+
+	args := []interface{}{}
+	for _, pair := range inPairs {
+		args = append(args, []interface{}{pair.CollectionID, pair.Ts})
+	}
+
 	tenantID := contextutil.TenantID(ctx)
 	if tenantID != "" {
-		sqlStr = sqlStr + " and tenant_id=?"
+		sqlStr2 = sqlStr2 + " and collections.tenant_id=?"
 		args = append(args, tenantID)
 	}
+	query, newArgs, err := sqlx.In(sqlStr2, args...)
+	if err != nil {
+		log.Error("sql in clause error", zap.Error(err))
+		return nil, err
+	}
+	query = tc.DB.Rebind(query) // Rebind query
 	var result []struct {
 		Collection
 		Partition
 		Field
 	}
-	err := tc.DB.Unsafe().Select(&result, sqlStr, args...)
+	err = tc.DB.Unsafe().Select(&result, query, newArgs...)
 	if err != nil {
 		log.Error("list collection failed", zap.Uint64("ts", ts), zap.Error(err))
 		return nil, err
 	}
 
-	indexMap, _ := tc.listIndexesByCollectionID(ctx, -1) // populate index info
+	// 3. populate index info
+	indexMap, _ := tc.listIndexesByCollectionID(ctx, -1)
 	var colls []*model.Collection
 	for _, record := range result {
 		coll := record.Collection
@@ -213,46 +258,124 @@ func (tc *TableCatalog) ListCollections(ctx context.Context, ts typeutil.Timesta
 		c := ConvertCollectionDBToModel(&coll, &record.Partition, &record.Field, &index)
 		colls = append(colls, c)
 	}
+
 	return ConvertCollectionsToNameMap(colls), nil
 }
 
 func (tc *TableCatalog) CollectionExists(ctx context.Context, collectionID typeutil.UniqueID, ts typeutil.Timestamp) bool {
-	sqlStr := "select tenant_id, collection_id, collection_name, description, auto_id, ts, properties, created_at from collections where collection_id=?"
-	var coll Collection
+	sqlStr := "select tenant_id, collection_id, ts, is_deleted from collections where collection_id=?"
 	args := []interface{}{collectionID}
 	if ts > 0 {
-		sqlStr = sqlStr + " and ts<=?"
+		sqlStr = sqlStr + " and ts>0 and ts<=? order by ts desc limit 1"
 		args = append(args, ts)
 	} else {
-		sqlStr = sqlStr + " and is_deleted=false"
+		sqlStr = sqlStr + " and ts=0"
 	}
 	tenantID := contextutil.TenantID(ctx)
 	if tenantID != "" {
 		sqlStr = sqlStr + " and tenant_id=?"
 		args = append(args, tenantID)
 	}
+
+	var coll Collection
 	err := tc.DB.Get(&coll, sqlStr, args...)
 	if err != nil {
 		log.Error("get collection by ID failed", zap.Int64("collID", collectionID), zap.Uint64("ts", ts), zap.Error(err))
 		// Also, an error is returned if the result set is empty.
 		return false
 	}
-	return true
+
+	return !coll.IsDeleted
 }
 
-func (tc *TableCatalog) DropCollection(ctx context.Context, collectionInfo *model.Collection, ts typeutil.Timestamp) error {
+func (tc *TableCatalog) DropCollection(ctx context.Context, collection *model.Collection, ts typeutil.Timestamp) error {
 	tenantID := contextutil.TenantID(ctx)
 	return WithTransaction(tc.DB, func(tx Transaction) error {
-		// sql 1
-		sqlStr1 := "update collections set is_deleted=true where collection_id=? and ts=?"
-		args1 := []interface{}{collectionInfo.CollectionID, ts}
-		if tenantID != "" {
-			sqlStr1 = sqlStr1 + " and tenant_id=?"
-			args1 = append(args1, tenantID)
+		if ts > 0 {
+			// sql 1
+			sqlStr1 := "insert into collections(tenant_id, collection_id, ts, is_deleted) values (?,?,?,?)"
+			_, err := tx.Exec(sqlStr1, tenantID, collection.CollectionID, ts, true)
+			if err != nil {
+				log.Error("insert tombstone collection failed", zap.Error(err))
+				return err
+			}
+
+			// sql 2
+			var collAliases []CollectionAlias
+			for _, alias := range collection.Aliases {
+				collAliases = append(collAliases, CollectionAlias{
+					TenantID:        &tenantID,
+					CollectionID:    collection.CollectionID,
+					CollectionAlias: alias,
+					Ts:              ts,
+					IsDeleted:       true,
+				})
+			}
+			if len(collAliases) > 0 {
+				sqlStr2 := "insert into collection_aliases(tenant_id, collection_id, collection_alias, ts, is_deleted) values (:tenant_id, :collection_id, :collection_alias, :ts, :is_deleted)"
+				_, err = tx.NamedExec(sqlStr2, collAliases)
+				if err != nil {
+					log.Error("insert tombstone coll alias failed", zap.Error(err))
+					return err
+				}
+			}
+		} else {
+			// sql 1
+			sqlStr1 := "update collections set is_deleted=true where collection_id=? and ts=0"
+			args1 := []interface{}{collection.CollectionID}
+			if tenantID != "" {
+				sqlStr1 = sqlStr1 + " and tenant_id=?"
+				args1 = append(args1, tenantID)
+			}
+			rs, err := tx.Exec(sqlStr1, args1...)
+			if err != nil {
+				log.Error("update collection failed", zap.Error(err))
+				return err
+			}
+			n, err := rs.RowsAffected()
+			if err != nil {
+				log.Error("get RowsAffected failed", zap.Error(err))
+				return err
+			}
+			log.Debug("table collections RowsAffected", zap.Any("rows", n))
+
+			// sql 2
+			if len(collection.Aliases) > 0 {
+				sqlStr2 := "update collection_aliases set is_deleted=true where collection_id=? and collection_alias in (?) and ts=0"
+				args2 := []interface{}{collection.CollectionID, collection.Aliases}
+				if tenantID != "" {
+					sqlStr2 = sqlStr2 + " and tenant_id=?"
+					args2 = append(args2, tenantID)
+				}
+				query, newArgs, err := sqlx.In(sqlStr2, args2...)
+				if err != nil {
+					log.Error("sql in clause error", zap.Error(err))
+					return err
+				}
+				rs, err = tx.Exec(query, newArgs...)
+				if err != nil {
+					log.Error("update collection_aliases failed", zap.Error(err))
+					return err
+				}
+				n, err = rs.RowsAffected()
+				if err != nil {
+					log.Error("get RowsAffected failed", zap.Error(err))
+					return err
+				}
+				log.Debug("table collection_aliases RowsAffected", zap.Any("rows", n))
+			}
 		}
-		rs, err := tx.Exec(sqlStr1, args1...)
+
+		// sql 3
+		sqlStr3 := "update indexes set is_deleted=true where collection_id=?"
+		args3 := []interface{}{collection.CollectionID}
+		if tenantID != "" {
+			sqlStr3 = sqlStr3 + " and tenant_id=?"
+			args3 = append(args3, tenantID)
+		}
+		rs, err := tx.Exec(sqlStr3, args3...)
 		if err != nil {
-			log.Error("delete collection failed", zap.Error(err))
+			log.Error("update indexes by collection ID failed", zap.Error(err))
 			return err
 		}
 		n, err := rs.RowsAffected()
@@ -260,73 +383,16 @@ func (tc *TableCatalog) DropCollection(ctx context.Context, collectionInfo *mode
 			log.Error("get RowsAffected failed", zap.Error(err))
 			return err
 		}
-		log.Debug("table collections RowsAffected", zap.Any("rows", n))
-
-		// sql 2
-		sqlStr2 := "update partitions set is_deleted=true where collection_id=? and ts=?"
-		args2 := []interface{}{collectionInfo.CollectionID, ts}
-		if tenantID != "" {
-			sqlStr2 = sqlStr2 + " and tenant_id=?"
-			args2 = append(args2, tenantID)
-		}
-		rs, err = tx.Exec(sqlStr2, args2...)
-		if err != nil {
-			log.Error("delete partition failed", zap.Error(err))
-			return err
-		}
-		n, err = rs.RowsAffected()
-		if err != nil {
-			log.Error("get RowsAffected failed", zap.Error(err))
-			return err
-		}
-		log.Debug("table partitions RowsAffected", zap.Any("rows", n))
-
-		// sql 3
-		sqlStr3 := "update field_schemas set is_deleted=true where collection_id=? and ts=?"
-		args3 := []interface{}{collectionInfo.CollectionID, ts}
-		if tenantID != "" {
-			sqlStr3 = sqlStr3 + " and tenant_id=?"
-			args3 = append(args3, tenantID)
-		}
-		rs, err = tx.Exec(sqlStr3, args3...)
-		if err != nil {
-			log.Error("delete field_schemas failed", zap.Error(err))
-			return err
-		}
-		n, err = rs.RowsAffected()
-		if err != nil {
-			log.Error("get RowsAffected failed", zap.Error(err))
-			return err
-		}
-		log.Debug("table field_schemas RowsAffected", zap.Any("rows", n))
+		log.Debug("table indexes RowsAffected", zap.Any("rows", n))
 
 		// sql 4
-		sqlStr4 := "update indexes set is_deleted=true where collection_id=? and ts=?"
-		args4 := []interface{}{collectionInfo.CollectionID, ts}
+		sqlStr4 := "update segment_indexes set is_deleted=true where collection_id=?"
+		args4 := []interface{}{collection.CollectionID}
 		if tenantID != "" {
 			sqlStr4 = sqlStr4 + " and tenant_id=?"
 			args4 = append(args4, tenantID)
 		}
 		rs, err = tx.Exec(sqlStr4, args4...)
-		if err != nil {
-			log.Error("update indexes by collection ID failed", zap.Error(err))
-			return err
-		}
-		n, err = rs.RowsAffected()
-		if err != nil {
-			log.Error("get RowsAffected failed", zap.Error(err))
-			return err
-		}
-		log.Debug("table indexes RowsAffected", zap.Any("rows", n))
-
-		// sql 5
-		sqlStr5 := "update segment_indexes set is_deleted=true where collection_id=? and ts=?"
-		args5 := []interface{}{collectionInfo.CollectionID, ts}
-		if tenantID != "" {
-			sqlStr5 = sqlStr5 + " and tenant_id=?"
-			args5 = append(args5, tenantID)
-		}
-		rs, err = tx.Exec(sqlStr5, args5...)
 		if err != nil {
 			log.Error("update segment_indexes by collection ID failed", zap.Error(err))
 			return err
@@ -337,25 +403,6 @@ func (tc *TableCatalog) DropCollection(ctx context.Context, collectionInfo *mode
 			return err
 		}
 		log.Debug("table segment_indexes RowsAffected", zap.Any("rows", n))
-
-		// sql 6
-		sqlStr6 := "update collection_aliases set is_deleted=true where collection_id=? and ts=?"
-		args6 := []interface{}{collectionInfo.CollectionID, ts}
-		if tenantID != "" {
-			sqlStr6 = sqlStr6 + " and tenant_id=?"
-			args6 = append(args6, tenantID)
-		}
-		rs, err = tx.Exec(sqlStr6, args6...)
-		if err != nil {
-			log.Error("delete collection alias failed", zap.Error(err))
-			return err
-		}
-		n, err = rs.RowsAffected()
-		if err != nil {
-			log.Error("get RowsAffected failed", zap.Error(err))
-			return err
-		}
-		log.Debug("table collection_aliases RowsAffected", zap.Any("rows", n))
 
 		return err
 	})
@@ -383,24 +430,33 @@ func (tc *TableCatalog) CreatePartition(ctx context.Context, coll *model.Collect
 }
 
 func (tc *TableCatalog) DropPartition(ctx context.Context, collection *model.Collection, partitionID typeutil.UniqueID, ts typeutil.Timestamp) error {
-	sqlStr1 := "update partitions set is_deleted=true where partition_id=? and ts=?"
-	args := []interface{}{partitionID, ts}
 	tenantID := contextutil.TenantID(ctx)
-	if tenantID != "" {
-		sqlStr1 = sqlStr1 + " and tenant_id=?"
-		args = append(args, tenantID)
+	if ts > 0 {
+		sqlStr1 := "insert into partitions(tenant_id, partition_id, partition_created_timestamp, collection_id, ts, is_deleted) values (?,?,?,?,?,?)"
+		_, err := tc.DB.Exec(sqlStr1, tenantID, partitionID, collection.CollectionID, ts, ts, true)
+		if err != nil {
+			log.Error("insert tombstone partition failed", zap.Error(err))
+			return err
+		}
+	} else {
+		sqlStr1 := "update partitions set is_deleted=true where partition_id=? and ts=0"
+		args := []interface{}{partitionID}
+		if tenantID != "" {
+			sqlStr1 = sqlStr1 + " and tenant_id=?"
+			args = append(args, tenantID)
+		}
+		rs, err := tc.DB.Exec(sqlStr1, args...)
+		if err != nil {
+			log.Error("update partition failed", zap.Error(err))
+			return err
+		}
+		n, err := rs.RowsAffected()
+		if err != nil {
+			log.Error("get RowsAffected failed", zap.Error(err))
+			return err
+		}
+		log.Debug("table partitions RowsAffected", zap.Any("rows", n))
 	}
-	rs, err := tc.DB.Exec(sqlStr1, args...)
-	if err != nil {
-		log.Error("delete partition failed", zap.Error(err))
-		return err
-	}
-	n, err := rs.RowsAffected()
-	if err != nil {
-		log.Error("get RowsAffected failed", zap.Error(err))
-		return err
-	}
-	log.Debug("table partitions RowsAffected", zap.Any("rows", n))
 
 	return nil
 }
@@ -503,12 +559,12 @@ func (tc *TableCatalog) AlterIndex(ctx context.Context, oldIndex *model.Index, n
 	return nil
 }
 
-func (tc *TableCatalog) DropIndex(ctx context.Context, collectionInfo *model.Collection, dropIdxID typeutil.UniqueID, ts typeutil.Timestamp) error {
+func (tc *TableCatalog) DropIndex(ctx context.Context, collectionInfo *model.Collection, dropIdxID typeutil.UniqueID) error {
 	tenantID := contextutil.TenantID(ctx)
 	return WithTransaction(tc.DB, func(tx Transaction) error {
 		// sql 1
-		sqlStr1 := "update indexes set is_deleted=true where index_id=? and ts=?"
-		args1 := []interface{}{dropIdxID, ts}
+		sqlStr1 := "update indexes set is_deleted=true where index_id=?"
+		args1 := []interface{}{dropIdxID}
 		if tenantID != "" {
 			sqlStr1 = sqlStr1 + " and tenant_id=?"
 			args1 = append(args1, tenantID)
@@ -526,8 +582,8 @@ func (tc *TableCatalog) DropIndex(ctx context.Context, collectionInfo *model.Col
 		log.Debug("table indexes RowsAffected", zap.Any("rows", n))
 
 		// sql 2
-		sqlStr2 := "update segment_indexes set is_deleted=true where index_id=? and ts=?"
-		args2 := []interface{}{dropIdxID, ts}
+		sqlStr2 := "update segment_indexes set is_deleted=true where index_id=?"
+		args2 := []interface{}{dropIdxID}
 		if tenantID != "" {
 			sqlStr2 = sqlStr2 + " and tenant_id=?"
 			args2 = append(args2, tenantID)
@@ -633,39 +689,89 @@ func (tc *TableCatalog) AddAlias(ctx context.Context, coll *model.CollectionAlia
 }
 
 func (tc *TableCatalog) DropAlias(ctx context.Context, collectionID typeutil.UniqueID, alias string, ts typeutil.Timestamp) error {
-	sqlStr := "update collection_aliases set is_deleted=true where collection_id=? and collection_alias=? and ts=?"
-	args := []interface{}{collectionID, alias, ts}
 	tenantID := contextutil.TenantID(ctx)
-	if tenantID != "" {
-		sqlStr = sqlStr + " and tenant_id=?"
-		args = append(args, tenantID)
+	if ts > 0 {
+		sqlStr1 := "insert into collection_aliases(tenant_id, collection_id, collection_alias, ts, is_deleted) values (?,?,?,?,?)"
+		_, err := tc.DB.Exec(sqlStr1, tenantID, collectionID, alias, ts, true)
+		if err != nil {
+			log.Error("insert tombstone coll alias failed", zap.Error(err))
+			return err
+		}
+	} else {
+		sqlStr := "update collection_aliases set is_deleted=true where collection_id=? and collection_alias=? and ts=0"
+		args := []interface{}{collectionID, alias}
+		if tenantID != "" {
+			sqlStr = sqlStr + " and tenant_id=?"
+			args = append(args, tenantID)
+		}
+		rs, err := tc.DB.Exec(sqlStr, args...)
+		if err != nil {
+			log.Error("drop coll alias failed", zap.Error(err))
+			return err
+		}
+		n, err := rs.RowsAffected()
+		if err != nil {
+			log.Error("get RowsAffected failed", zap.Error(err))
+			return err
+		}
+		log.Debug("table collection_aliases RowsAffected", zap.Any("rows", n))
 	}
-	rs, err := tc.DB.Exec(sqlStr, args...)
-	if err != nil {
-		log.Error("drop collection alias failed", zap.Error(err))
-		return err
-	}
-	n, err := rs.RowsAffected()
-	if err != nil {
-		log.Error("get RowsAffected failed", zap.Error(err))
-		return err
-	}
-	log.Debug("table collection_aliases RowsAffected", zap.Any("rows", n))
 
 	return nil
 }
 
+func sqlInPlaceholders(len int) string {
+	ins := ""
+	for i := 1; i <= len; i++ {
+		if i != len {
+			ins = ins + "(?),"
+		} else {
+			ins = ins + "(?)"
+		}
+	}
+	return ins
+}
+
 // ListAliases query collection ID and aliases only, other information are not needed
-func (tc *TableCatalog) ListAliases(ctx context.Context) ([]*model.Collection, error) {
-	sqlStr := "select collection_id, collection_alias from collection_aliases where is_deleted=false"
+func (tc *TableCatalog) ListAliases(ctx context.Context, ts typeutil.Timestamp) ([]*model.Collection, error) {
+	// 1. find each collection with latest ts
+	sqlStr1 := "select collection_id, max(ts) ts from collection_aliases where ts<=? group by collection_id"
+	var inPairs []struct {
+		CollectionID string             `db:"collection_id"`
+		Ts           typeutil.Timestamp `db:"ts"`
+	}
+	err := tc.DB.Select(&inPairs, sqlStr1, ts)
+	if err != nil {
+		log.Error("list latest ts and corresponding collectionID in collection_aliases failed", zap.Uint64("ts", ts), zap.Error(err))
+		return nil, err
+	}
+	if len(inPairs) == 0 {
+		return []*model.Collection{}, nil
+	}
+
+	// 2. select with in clause
+	inPlaceHolders := sqlInPlaceholders(len(inPairs))
+	sqlStr2 := fmt.Sprintf("select collection_id, collection_alias from collection_aliases where is_deleted=false and (collection_id, ts) in (%s)", inPlaceHolders)
+
 	args := []interface{}{}
+	for _, pair := range inPairs {
+		args = append(args, []interface{}{pair.CollectionID, pair.Ts})
+	}
+
 	tenantID := contextutil.TenantID(ctx)
 	if tenantID != "" {
-		sqlStr = sqlStr + " and tenant_id=?"
+		sqlStr2 = sqlStr2 + " and tenant_id=?"
 		args = append(args, tenantID)
 	}
+
+	query, newArgs, err := sqlx.In(sqlStr2, args...)
+	if err != nil {
+		log.Error("sql in clause error", zap.Error(err))
+		return nil, err
+	}
+	//query = tc.DB.Rebind(query)
 	var collAliases []CollectionAlias
-	err := tc.DB.Select(&collAliases, sqlStr, args...)
+	err = tc.DB.Select(&collAliases, query, newArgs...)
 	if err != nil {
 		log.Error("list collection alias failed", zap.Error(err))
 		return nil, err
@@ -678,6 +784,7 @@ func (tc *TableCatalog) ListAliases(ctx context.Context) ([]*model.Collection, e
 			Name:         record.CollectionAlias,
 		})
 	}
+
 	return colls, nil
 }
 
