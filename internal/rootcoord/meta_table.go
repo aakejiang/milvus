@@ -1617,11 +1617,13 @@ func (mt *MetaTable) getCredential(username string) (*internalpb.CredentialInfo,
 		return nil, err
 	}
 
+	log.Info("get credential from etcd", zap.String("key", k), zap.String("value", v))
 	credentialInfo := internalpb.CredentialInfo{}
 	err = json.Unmarshal([]byte(v), &credentialInfo)
 	if err != nil {
 		return nil, fmt.Errorf("get credential unmarshal err:%w", err)
 	}
+	log.Info("unmarshal credential value", zap.String("encrypted", credentialInfo.EncryptedPassword))
 	return &internalpb.CredentialInfo{Username: username, EncryptedPassword: credentialInfo.EncryptedPassword}, nil
 }
 

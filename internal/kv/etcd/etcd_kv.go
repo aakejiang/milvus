@@ -173,6 +173,7 @@ func (kv *EtcdKV) LoadBytesWithPrefix2(key string) ([]string, [][]byte, []int64,
 func (kv *EtcdKV) Load(key string) (string, error) {
 	start := time.Now()
 	key = path.Join(kv.rootPath, key)
+	log.Info("etcd key", zap.String("key", key))
 	ctx, cancel := context.WithTimeout(context.TODO(), RequestTimeout)
 	defer cancel()
 	resp, err := kv.client.Get(ctx, key)
