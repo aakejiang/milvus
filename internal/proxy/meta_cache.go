@@ -502,7 +502,12 @@ func (m *MetaCache) GetCredentialInfo(ctx context.Context, username string) (*in
 	credInfo, ok := m.credMap[username]
 	m.credMut.RUnlock()
 
+	for k, v := range m.credMap {
+		log.Info("list cache key and value", zap.String("key", k), zap.String("uname", v.Username), zap.String("sha256", v.Sha256Password), zap.String("bcrypt", v.EncryptedPassword))
+	}
+
 	if !ok {
+		log.Info("miss cache", zap.String("username", username))
 		req := &rootcoordpb.GetCredentialRequest{
 			Base: &commonpb.MsgBase{
 				MsgType: commonpb.MsgType_GetCredential,
@@ -517,10 +522,12 @@ func (m *MetaCache) GetCredentialInfo(ctx context.Context, username string) (*in
 			Username:          resp.Username,
 			EncryptedPassword: resp.Password,
 		}
+		log.Info("get from etcd result", zap.String("username", credInfo.Username), zap.String("encrypted", credInfo.EncryptedPassword))
 		m.UpdateCredential(credInfo)
 		return credInfo, nil
 	}
 
+	log.Info("hit cache", zap.String("username", credInfo.Username), zap.String("encrypted", credInfo.Sha256Password))
 	return &internalpb.CredentialInfo{
 		Username:       credInfo.Username,
 		Sha256Password: credInfo.Sha256Password,
