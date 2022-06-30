@@ -524,14 +524,11 @@ func (m *MetaCache) GetCredentialInfo(ctx context.Context, username string) (*in
 		}
 		log.Info("get from etcd result", zap.String("username", credInfo.Username), zap.String("encrypted", credInfo.EncryptedPassword))
 		m.UpdateCredential(credInfo)
-		return credInfo, nil
+	} else {
+		log.Info("hit cache", zap.String("username", credInfo.Username), zap.String("sha256", credInfo.Sha256Password))
 	}
 
-	log.Info("hit cache", zap.String("username", credInfo.Username), zap.String("encrypted", credInfo.Sha256Password))
-	return &internalpb.CredentialInfo{
-		Username:       credInfo.Username,
-		Sha256Password: credInfo.Sha256Password,
-	}, nil
+	return credInfo, nil
 }
 
 func (m *MetaCache) ClearCredUsers() {
