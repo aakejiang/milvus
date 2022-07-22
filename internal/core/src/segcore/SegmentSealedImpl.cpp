@@ -84,7 +84,7 @@ SegmentSealedImpl::LoadVecIndex(const LoadIndexInfo& info) {
 
     auto index = std::dynamic_pointer_cast<knowhere::VecIndex>(info.index);
     AssertInfo(info.index_params.count("metric_type"), "Can't get metric_type in index_params");
-    auto metric_type_str = info.index_params.at("metric_type");
+    auto metric_type = info.index_params.at("metric_type");
     auto row_count = index->Count();
     AssertInfo(row_count > 0, "Index count is 0");
 
@@ -101,7 +101,7 @@ SegmentSealedImpl::LoadVecIndex(const LoadIndexInfo& info) {
                        std::to_string(row_count_opt_.value()) + ")");
     }
     AssertInfo(!vector_indexings_.is_ready(field_id), "vec index is not ready");
-    vector_indexings_.append_field_indexing(field_id, GetMetricType(metric_type_str), index);
+    vector_indexings_.append_field_indexing(field_id, metric_type, index);
 
     set_bit(index_ready_bitset_, field_id, true);
     update_row_count(row_count);
@@ -135,19 +135,19 @@ SegmentSealedImpl::LoadScalarIndex(const LoadIndexInfo& info) {
     // reverse pk from scalar index and set pks to offset
     if (schema_->get_primary_field_id() == field_id) {
         AssertInfo(field_id.get() != -1, "Primary key is -1");
-        AssertInfo(pk2offset_.empty(), "already exists");
+        AssertInfo(insert_record_.empty_pks(), "already exists");
         switch (field_meta.get_data_type()) {
             case DataType::INT64: {
                 auto int64_index = std::dynamic_pointer_cast<scalar::ScalarIndex<int64_t>>(info.index);
                 for (int i = 0; i < row_count; ++i) {
-                    pk2offset_.insert(std::make_pair(int64_index->Reverse_Lookup(i), i));
+                    insert_record_.insert_pk(int64_index->Reverse_Lookup(i), i);
                 }
                 break;
             }
             case DataType::VARCHAR: {
                 auto string_index = std::dynamic_pointer_cast<scalar::ScalarIndex<std::string>>(info.index);
                 for (int i = 0; i < row_count; ++i) {
-                    pk2offset_.insert(std::make_pair(string_index->Reverse_Lookup(i), i));
+                    insert_record_.insert_pk(string_index->Reverse_Lookup(i), i);
                 }
                 break;
             }
@@ -226,11 +226,11 @@ SegmentSealedImpl::LoadFieldData(const LoadFieldDataInfo& info) {
         // set pks to offset
         if (schema_->get_primary_field_id() == field_id) {
             AssertInfo(field_id.get() != -1, "Primary key is -1");
-            AssertInfo(pk2offset_.empty(), "already exists");
+            AssertInfo(insert_record_.empty_pks(), "already exists");
             std::vector<PkType> pks(size);
             ParsePksFromFieldData(pks, *info.field_data);
             for (int i = 0; i < size; ++i) {
-                pk2offset_.insert(std::make_pair(pks[i], i));
+                insert_record_.insert_pk(pks[i], i);
             }
         }
 
@@ -254,11 +254,10 @@ SegmentSealedImpl::LoadDeletedRecord(const LoadDeletedRecordInfo& info) {
     auto timestamps = reinterpret_cast<const Timestamp*>(info.timestamps);
 
     // step 2: fill pks and timestamps
-    deleted_record_.pks_.set_data_raw(0, pks.data(), size);
-    deleted_record_.timestamps_.set_data_raw(0, timestamps, size);
-    deleted_record_.ack_responder_.AddSegment(0, size);
-    deleted_record_.reserved.fetch_add(size);
-    deleted_record_.record_size_ = size;
+    auto reserved_begin = deleted_record_.reserved.fetch_add(size);
+    deleted_record_.pks_.set_data_raw(reserved_begin, pks.data(), size);
+    deleted_record_.timestamps_.set_data_raw(reserved_begin, timestamps, size);
+    deleted_record_.ack_responder_.AddSegment(reserved_begin, reserved_begin + size);
 }
 
 // internal API: support scalar index only
@@ -303,8 +302,9 @@ SegmentSealedImpl::chunk_data_impl(FieldId field_id, int64_t chunk_id) const {
 
 const knowhere::Index*
 SegmentSealedImpl::chunk_index_impl(FieldId field_id, int64_t chunk_id) const {
+    AssertInfo(scalar_indexings_.find(field_id) != scalar_indexings_.end(),
+               "Cannot find scalar_indexing with field_id: " + std::to_string(field_id.get()));
     auto ptr = scalar_indexings_.at(field_id).get();
-    AssertInfo(ptr, "Scalar index of " + std::to_string(field_id.get()) + " is null");
     return ptr;
 }
 
@@ -322,6 +322,12 @@ SegmentSealedImpl::get_row_count() const {
     return row_count_opt_.value_or(0);
 }
 
+int64_t
+SegmentSealedImpl::get_deleted_count() const {
+    std::shared_lock lck(mutex_);
+    return deleted_record_.ack_responder_.GetAck();
+}
+
 const Schema&
 SegmentSealedImpl::get_schema() const {
     return *schema_;
@@ -333,8 +339,7 @@ SegmentSealedImpl::mask_with_delete(BitsetType& bitset, int64_t ins_barrier, Tim
     if (del_barrier == 0) {
         return;
     }
-    auto bitmap_holder =
-        get_deleted_bitmap(del_barrier, ins_barrier, deleted_record_, insert_record_, pk2offset_, timestamp);
+    auto bitmap_holder = get_deleted_bitmap(del_barrier, ins_barrier, deleted_record_, insert_record_, timestamp);
     if (!bitmap_holder || !bitmap_holder->bitmap_ptr) {
         return;
     }
@@ -345,7 +350,7 @@ SegmentSealedImpl::mask_with_delete(BitsetType& bitset, int64_t ins_barrier, Tim
 
 void
 SegmentSealedImpl::vector_search(int64_t vec_count,
-                                 query::SearchInfo search_info,
+                                 query::SearchInfo& search_info,
                                  const void* query_data,
                                  int64_t query_count,
                                  Timestamp timestamp,
@@ -381,14 +386,7 @@ SegmentSealedImpl::vector_search(int64_t vec_count,
     auto vec_data = insert_record_.get_field_data_base(field_id);
     AssertInfo(vec_data->num_chunk() == 1, "num chunk not equal to 1 for sealed segment");
     auto chunk_data = vec_data->get_chunk_data(0);
-
-    auto sub_qr = [&] {
-        if (field_meta.get_data_type() == DataType::VECTOR_FLOAT) {
-            return query::FloatSearchBruteForce(dataset, chunk_data, row_count, bitset);
-        } else {
-            return query::BinarySearchBruteForce(dataset, chunk_data, row_count, bitset);
-        }
-    }();
+    auto sub_qr = query::BruteForceSearch(dataset, chunk_data, row_count, bitset);
 
     SearchResult results;
     results.distances_ = std::move(sub_qr.mutable_distances());
@@ -668,25 +666,22 @@ SegmentSealedImpl::search_ids(const IdArray& id_array, Timestamp timestamp) cons
     auto res_id_arr = std::make_unique<IdArray>();
     std::vector<SegOffset> res_offsets;
     for (auto pk : pks) {
-        auto [iter_b, iter_e] = pk2offset_.equal_range(pk);
-        for (auto iter = iter_b; iter != iter_e; ++iter) {
-            auto offset = SegOffset(iter->second);
-            if (insert_record_.timestamps_[offset.get()] <= timestamp) {
-                switch (data_type) {
-                    case DataType::INT64: {
-                        res_id_arr->mutable_int_id()->add_data(std::get<int64_t>(pk));
-                        break;
-                    }
-                    case DataType::VARCHAR: {
-                        res_id_arr->mutable_str_id()->add_data(std::get<std::string>(pk));
-                        break;
-                    }
-                    default: {
-                        PanicInfo("unsupported type");
-                    }
+        auto segOffsets = insert_record_.search_pk(pk, timestamp);
+        for (auto offset : segOffsets) {
+            switch (data_type) {
+                case DataType::INT64: {
+                    res_id_arr->mutable_int_id()->add_data(std::get<int64_t>(pk));
+                    break;
                 }
-                res_offsets.push_back(offset);
+                case DataType::VARCHAR: {
+                    res_id_arr->mutable_str_id()->add_data(std::get<std::string>(pk));
+                    break;
+                }
+                default: {
+                    PanicInfo("unsupported type");
+                }
             }
+            res_offsets.push_back(offset);
         }
     }
     return {std::move(res_id_arr), std::move(res_offsets)};

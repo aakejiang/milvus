@@ -83,6 +83,8 @@ const (
 
 	defaultCollectionName = "query-node-unittest-default-collection"
 	defaultPartitionName  = "query-node-unittest-default-partition"
+
+	defaultChannelName = "default-channel"
 )
 
 const (
@@ -1447,7 +1449,7 @@ func genSearchPlanAndRequests(collection *Collection, indexType string, nq int64
 	iReq, _ := genSearchRequest(nq, indexType, collection.schema)
 	queryReq := &querypb.SearchRequest{
 		Req:             iReq,
-		DmlChannel:      defaultDMLChannel,
+		DmlChannels:     []string{defaultDMLChannel},
 		SegmentIDs:      []UniqueID{defaultSegmentID},
 		FromShardLeader: true,
 		Scope:           querypb.DataScope_Historical,
@@ -1503,8 +1505,25 @@ func genSimpleRetrievePlan(collection *Collection) (*RetrievePlan, error) {
 	}
 	timestamp := retrieveMsg.RetrieveRequest.TravelTimestamp
 
-	plan, err2 := createRetrievePlanByExpr(collection, retrieveMsg.SerializedExprPlan, timestamp)
+	plan, err2 := createRetrievePlanByExpr(collection, retrieveMsg.SerializedExprPlan, timestamp, 100)
 	return plan, err2
+}
+
+func genGetCollectionStatisticRequest() (*internalpb.GetStatisticsRequest, error) {
+	return &internalpb.GetStatisticsRequest{
+		Base:         genCommonMsgBase(commonpb.MsgType_GetCollectionStatistics),
+		DbID:         0,
+		CollectionID: defaultCollectionID,
+	}, nil
+}
+
+func genGetPartitionStatisticRequest() (*internalpb.GetStatisticsRequest, error) {
+	return &internalpb.GetStatisticsRequest{
+		Base:         genCommonMsgBase(commonpb.MsgType_GetPartitionStatistics),
+		DbID:         0,
+		CollectionID: defaultCollectionID,
+		PartitionIDs: []UniqueID{defaultPartitionID},
+	}, nil
 }
 
 func genSearchRequest(nq int64, indexType string, schema *schemapb.CollectionSchema) (*internalpb.SearchRequest, error) {

@@ -5,7 +5,7 @@ pipeline {
     }
     agent {
         kubernetes {
-            label "milvus-chaos-test"
+            label "milvus-test"
             defaultContainer 'main'
             yamlFile "build/ci/jenkins/pod/chaos-test.yaml"
             customWorkspace '/home/jenkins/agent/workspace'
@@ -24,7 +24,7 @@ pipeline {
             mem-stress: datanode, etcd, indexnode, minio, proxy, pulsar, querynode, standalone \
             io-fault & io-latency: minio, pulsar, etcd ',
             name: 'pod_name',
-            choices: ["standalone", "datacoord", "datanode", "indexcoord", "indexnode", "proxy", "pulsar", "querycoord", "querynode", "rootcoord", "etcd", "minio"]
+            choices: ["allstandalone", "allcluster", "standalone", "datacoord", "datanode", "indexcoord", "indexnode", "proxy", "pulsar", "querycoord", "querynode", "rootcoord", "etcd", "minio"]
         )
         choice(
             description: 'Chaos Test Task',
@@ -42,6 +42,11 @@ pipeline {
             defaultValue: 'master-latest'
         )
         string(
+            description: 'Wait Time after chaos test',
+            name: 'idel_time',
+            defaultValue: '1'
+        )
+        string(
             description: 'Etcd Image Repository',
             name: 'etcd_image_repository',
             defaultValue: "milvusdb/etcd"
@@ -49,12 +54,27 @@ pipeline {
         string(
             description: 'Etcd Image Tag',
             name: 'etcd_image_tag',
-            defaultValue: "3.5.0-debian-10-r115"
+            defaultValue: "3.5.0-r6"
         )
         string(
-            description: 'Query Replic Nums',
+            description: 'QueryNode Nums',
             name: 'querynode_nums',
             defaultValue: '3'
+        )
+        string(
+            description: 'DataNode Nums',
+            name: 'datanode_nums',
+            defaultValue: '2'
+        )
+        string(
+            description: 'IndexNode Nums',
+            name: 'indexnode_nums',
+            defaultValue: '1'
+        )
+        string(
+            description: 'Proxy Nums',
+            name: 'proxy_nums',
+            defaultValue: '1'
         )
         booleanParam(
             description: 'Keep Env',
@@ -88,6 +108,9 @@ pipeline {
                         script {
                         sh """
                         yq -i '.queryNode.replicas = "${params.querynode_nums}"' cluster-values.yaml
+                        yq -i '.dataNode.replicas = "${params.datanode_nums}"' cluster-values.yaml
+                        yq -i '.indexNode.replicas = "${params.indexnode_nums}"' cluster-values.yaml
+                        yq -i '.proxy.replicas = "${params.proxy_nums}"' cluster-values.yaml
                         yq -i '.etcd.image.repository = "${params.etcd_image_repository}"' cluster-values.yaml
                         yq -i '.etcd.image.tag = "${params.etcd_image_tag}"' cluster-values.yaml
                         yq -i '.etcd.image.repository = "${params.etcd_image_repository}"' standalone-values.yaml
@@ -108,7 +131,7 @@ pipeline {
                         script {
                             def image_tag_modified = ""
                             if ("${params.image_tag}" == "master-latest") {
-                                image_tag_modified = sh(returnStdout: true, script: 'bash ../../../../scripts/docker_image_find_tag.sh -n milvusdb/milvus-dev -t master-latest -f master- -F -L -q').trim()    
+                                image_tag_modified = sh(returnStdout: true, script: 'bash ../../../../scripts/docker_image_find_tag.sh -n milvusdb/milvus -t master-latest -f master- -F -L -q').trim()    
                             }
                             else {
                                 image_tag_modified = "${params.image_tag}"
@@ -196,7 +219,7 @@ pipeline {
                         }
                         if ("${params.chaos_task}" == "data-consist-test"){
                             def host = sh(returnStdout: true, script: "kubectl get svc/${env.RELEASE_NAME}-milvus -o jsonpath=\"{.spec.clusterIP}\"").trim()
-                            sh "pytest -s -v test_chaos_data_consist.py --host $host --log-cli-level=INFO --capture=no || echo "chaos test fail" "                           
+                            sh "pytest -s -v test_chaos_data_consist.py --host $host --log-cli-level=INFO --capture=no || echo 'chaos test fail' "                           
                         }
                         echo "chaos test done"
                         sh "kubectl wait --for=condition=Ready pod -l app.kubernetes.io/instance=${env.RELEASE_NAME} -n ${env.NAMESPACE} --timeout=360s"
@@ -219,8 +242,21 @@ pipeline {
                     }
                 }
             }
-        } 
+        }
+        stage ('Milvus Idle Time') {
 
+            steps {
+                container('main') {
+                    dir ('tests/python_client/chaos') {
+                        script {
+                        echo "sleep ${params.idel_time}m"
+                        sh "sleep ${params.idel_time}m"
+                        }
+                    }
+                }
+            }
+        }
+        
         stage ('run e2e test after chaos') {
             options {
               timeout(time: 5, unit: 'MINUTES')   // timeout on this stage

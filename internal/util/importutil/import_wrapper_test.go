@@ -58,7 +58,7 @@ func (mc *MockChunkManager) MultiRead(filePaths []string) ([][]byte, error) {
 	return nil, nil
 }
 
-func (mc *MockChunkManager) ListWithPrefix(prefix string) ([]string, error) {
+func (mc *MockChunkManager) ListWithPrefix(prefix string, recursive bool) ([]string, error) {
 	return nil, nil
 }
 
@@ -450,7 +450,9 @@ func Test_ImportColumnBased_numpy(t *testing.T) {
 	reportFunc := func(res *rootcoordpb.ImportResult) error {
 		return nil
 	}
-	wrapper := NewImportWrapper(ctx, sampleSchema(), 2, 1, idAllocator, cm, flushFunc, importResult, reportFunc)
+	schema := sampleSchema()
+	schema.Fields[4].AutoID = true
+	wrapper := NewImportWrapper(ctx, schema, 2, 1, idAllocator, cm, flushFunc, importResult, reportFunc)
 
 	err = wrapper.Import(files, false, false)
 	assert.Nil(t, err)

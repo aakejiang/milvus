@@ -311,6 +311,8 @@ func Test_ConvertChannelName(t *testing.T) {
 	)
 	_, err := ConvertChannelName("by-dev", tFrom, tTo)
 	assert.NotNil(t, err)
+	_, err = ConvertChannelName("by-dev", "", tTo)
+	assert.NotNil(t, err)
 	_, err = ConvertChannelName("by-dev_rootcoord-delta_123v0", tFrom, tTo)
 	assert.NotNil(t, err)
 	str, err := ConvertChannelName(chanName, tFrom, tTo)
@@ -467,26 +469,37 @@ func Test_ReadBinary(t *testing.T) {
 }
 
 func TestIsGrpcErr(t *testing.T) {
-	var err1 error
-	assert.False(t, IsGrpcErr(err1))
+	t.Run("nil error", func(t *testing.T) {
+		var err error
+		assert.False(t, IsGrpcErr(err))
+	})
 
-	err1 = errors.New("error")
-	assert.False(t, IsGrpcErr(err1))
+	t.Run("normal errors new", func(t *testing.T) {
+		err := errors.New("error")
+		assert.False(t, IsGrpcErr(err))
+	})
 
-	bgCtx := context.Background()
-	ctx1, cancel1 := context.WithCancel(bgCtx)
-	cancel1()
-	assert.False(t, IsGrpcErr(ctx1.Err()))
+	t.Run("context cancel", func(t *testing.T) {
+		assert.False(t, IsGrpcErr(context.Canceled))
+	})
 
-	timeout := 20 * time.Millisecond
-	ctx1, cancel1 = context.WithTimeout(bgCtx, timeout)
-	time.Sleep(timeout * 2)
-	assert.False(t, IsGrpcErr(ctx1.Err()))
-	cancel1()
+	t.Run("context timeout", func(t *testing.T) {
+		assert.False(t, IsGrpcErr(context.DeadlineExceeded))
+	})
 
-	err1 = grpcStatus.Error(grpcCodes.Canceled, "test")
-	assert.True(t, IsGrpcErr(err1))
+	t.Run("grpc canceled", func(t *testing.T) {
+		err := grpcStatus.Error(grpcCodes.Canceled, "test")
+		assert.True(t, IsGrpcErr(err))
+	})
 
-	err1 = grpcStatus.Error(grpcCodes.Unavailable, "test")
-	assert.True(t, IsGrpcErr(err1))
+	t.Run("grpc unavailable", func(t *testing.T) {
+		err := grpcStatus.Error(grpcCodes.Unavailable, "test")
+		assert.True(t, IsGrpcErr(err))
+	})
+
+	t.Run("wrapped grpc error", func(t *testing.T) {
+		err := grpcStatus.Error(grpcCodes.Unavailable, "test")
+		errWrap := fmt.Errorf("wrap grpc error %w", err)
+		assert.True(t, IsGrpcErr(errWrap))
+	})
 }

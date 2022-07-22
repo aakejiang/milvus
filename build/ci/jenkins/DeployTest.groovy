@@ -4,7 +4,7 @@ pipeline {
     }
     agent {
         kubernetes {
-            label "milvus-chaos-test"
+            label "milvus-test"
             defaultContainer 'main'
             yamlFile "build/ci/jenkins/pod/chaos-test.yaml"
             customWorkspace '/home/jenkins/agent/workspace'
@@ -56,12 +56,27 @@ pipeline {
         string(
             description: 'Etcd Image Tag',
             name: 'etcd_image_tag',
-            defaultValue: "3.5.0-debian-10-r115"
+            defaultValue: "3.5.0-r6"
         )
         string(
             description: 'Querynode Nums',
             name: 'querynode_nums',
             defaultValue: '3'
+        )
+        string(
+            description: 'DataNode Nums',
+            name: 'datanode_nums',
+            defaultValue: '2'
+        )
+        string(
+            description: 'IndexNode Nums',
+            name: 'indexnode_nums',
+            defaultValue: '1'
+        )
+        string(
+            description: 'Proxy Nums',
+            name: 'proxy_nums',
+            defaultValue: '1'
         )
         string(
             description: 'Data Size',
@@ -106,6 +121,9 @@ pipeline {
                         script {
                         sh """
                         yq -i '.queryNode.replicas = "${params.querynode_nums}"' cluster-values.yaml
+                        yq -i '.dataNode.replicas = "${params.datanode_nums}"' cluster-values.yaml
+                        yq -i '.indexNode.replicas = "${params.indexnode_nums}"' cluster-values.yaml
+                        yq -i '.proxy.replicas = "${params.proxy_nums}"' cluster-values.yaml
                         yq -i '.etcd.image.repository = "${params.etcd_image_repository}"' cluster-values.yaml
                         yq -i '.etcd.image.tag = "${params.etcd_image_tag}"' cluster-values.yaml
                         yq -i '.etcd.image.repository = "${params.etcd_image_repository}"' standalone-values.yaml
@@ -132,7 +150,7 @@ pipeline {
                             def new_image_repository_modified = ""
 
                             if ("${params.old_image_tag}" == "master-latest") {
-                                old_image_tag_modified = sh(returnStdout: true, script: 'bash ../../../scripts/docker_image_find_tag.sh -n milvusdb/milvus-dev -t master-latest -f master- -F -L -q').trim()    
+                                old_image_tag_modified = sh(returnStdout: true, script: 'bash ../../../scripts/docker_image_find_tag.sh -n milvusdb/milvus -t master-latest -f master- -F -L -q').trim()    
                             }
                             else if ("${params.old_image_tag}" == "latest") {
                                 old_image_tag_modified = sh(returnStdout: true, script: 'bash ../../../scripts/docker_image_find_tag.sh -n milvusdb/milvus -t latest -F -L -q').trim()
@@ -142,7 +160,7 @@ pipeline {
                             }
 
                             if ("${params.new_image_tag}" == "master-latest") {
-                                new_image_tag_modified = sh(returnStdout: true, script: 'bash ../../../scripts/docker_image_find_tag.sh -n milvusdb/milvus-dev -t master-latest -f master- -F -L -q').trim()    
+                                new_image_tag_modified = sh(returnStdout: true, script: 'bash ../../../scripts/docker_image_find_tag.sh -n milvusdb/milvus -t master-latest -f master- -F -L -q').trim()    
                             }
                             else {
                                 new_image_tag_modified = "${params.new_image_tag}"
@@ -166,11 +184,22 @@ pipeline {
 
                             sh "helm repo add milvus https://milvus-io.github.io/milvus-helm"
                             sh "helm repo update"
-                            if ("${params.milvus_mode}" == "standalone") {
-                                sh "helm install --wait --timeout 720s ${env.RELEASE_NAME} milvus/milvus  --set image.all.repository=${old_image_repository_modified} --set image.all.tag=${old_image_tag_modified} -f standalone-values.yaml;"    
+                            if ("${params.deploy_task}" == "upgrade"){
+                                if ("${params.milvus_mode}" == "standalone") {
+                                    sh "helm install --wait --timeout 720s ${env.RELEASE_NAME} milvus/milvus  --set image.all.repository=${old_image_repository_modified} --set image.all.tag=${old_image_tag_modified} --set etcd.image.repository=bitnami/etcd --set etcd.image.tag=3.5.0-debian-10-r24 -f standalone-values.yaml;"    
+                                }
+                                if ("${params.milvus_mode}" == "cluster") {
+                                    sh "helm install --wait --timeout 720s ${env.RELEASE_NAME} milvus/milvus  --set image.all.repository=${old_image_repository_modified} --set image.all.tag=${old_image_tag_modified} --set etcd.image.repository=bitnami/etcd --set etcd.image.tag=3.5.0-debian-10-r24 -f cluster-values.yaml;"    
+                                }
                             }
-                            if ("${params.milvus_mode}" == "cluster") {
-                                sh "helm install --wait --timeout 720s ${env.RELEASE_NAME} milvus/milvus  --set image.all.repository=${old_image_repository_modified} --set image.all.tag=${old_image_tag_modified} -f cluster-values.yaml;"    
+
+                            if ("${params.deploy_task}" == "reinstall"){
+                                if ("${params.milvus_mode}" == "standalone") {
+                                    sh "helm install --wait --timeout 720s ${env.RELEASE_NAME} milvus/milvus  --set image.all.repository=${old_image_repository_modified} --set image.all.tag=${old_image_tag_modified} -f standalone-values.yaml;"    
+                                }
+                                if ("${params.milvus_mode}" == "cluster") {
+                                    sh "helm install --wait --timeout 720s ${env.RELEASE_NAME} milvus/milvus  --set image.all.repository=${old_image_repository_modified} --set image.all.tag=${old_image_tag_modified} -f cluster-values.yaml;"    
+                                }
                             }
                             sh "kubectl wait --for=condition=Ready pod -l app.kubernetes.io/instance=${env.RELEASE_NAME} -n ${env.NAMESPACE} --timeout=360s"
                             sh "kubectl wait --for=condition=Ready pod -l release=${env.RELEASE_NAME} -n ${env.NAMESPACE} --timeout=360s"
@@ -186,16 +215,16 @@ pipeline {
             }           
             steps {
                 container('main') {
-                    dir ('tests/python_client/deploy/scripts') {
+                    dir ('tests/python_client/deploy') {
                         script {
                         def host = sh(returnStdout: true, script: "kubectl get svc/${env.RELEASE_NAME}-milvus -o jsonpath=\"{.spec.clusterIP}\"").trim()
                         
                         if ("${params.deploy_task}" == "reinstall") {
-                            sh "python3 action_before_reinstall.py --host ${host} --data_size ${params.data_size}"
+                            sh "python3 scripts/action_before_reinstall.py --host ${host} --data_size ${params.data_size}"
                         }
 
                         if ("${params.deploy_task}" == "upgrade") {
-                            sh "python3 action_before_upgrade.py --host ${host} --data_size ${params.data_size}"
+                            sh "python3 scripts/action_before_upgrade.py --host ${host} --data_size ${params.data_size}"
                         }
                         }
                     }
@@ -232,7 +261,7 @@ pipeline {
                 }
             }
         }
-        stage ('Restart Milvus') {
+        stage ('Uninstall Milvus') {
             options {
               timeout(time: 15, unit: 'MINUTES')   // timeout on this stage
             }
@@ -240,10 +269,15 @@ pipeline {
                 container('main') {
                     dir ('tests/python_client/deploy') {
                         script {
-                            sh "kubectl delete pod -l app.kubernetes.io/instance=${env.RELEASE_NAME} --grace-period=0 --force"
-                            sh "kubectl delete pod -l release=${env.RELEASE_NAME} --grace-period=0 --force"
-                            sh "kubectl wait --for=condition=Ready pod -l app.kubernetes.io/instance=${env.RELEASE_NAME} -n ${env.NAMESPACE} --timeout=360s"
-                            sh "kubectl wait --for=condition=Ready pod -l release=${env.RELEASE_NAME} -n ${env.NAMESPACE} --timeout=360s"
+                            if ("${params.milvus_mode}" == "standalone") {
+                                sh "kubectl delete pod -l app.kubernetes.io/instance=${env.RELEASE_NAME} --grace-period=0 --force"
+                                sh "kubectl delete pod -l release=${env.RELEASE_NAME} --grace-period=0 --force"
+                                sh "kubectl wait --for=condition=Ready pod -l app.kubernetes.io/instance=${env.RELEASE_NAME} -n ${env.NAMESPACE} --timeout=360s"
+                                sh "kubectl wait --for=condition=Ready pod -l release=${env.RELEASE_NAME} -n ${env.NAMESPACE} --timeout=360s"
+                            }
+                            if ("${params.milvus_mode}" == "cluster") {
+                                sh "helm uninstall ${env.RELEASE_NAME}"
+                            }
                         }
                     }
                 }
@@ -253,7 +287,7 @@ pipeline {
 
         stage ('Second Milvus Deployment') {
             options {
-              timeout(time: 15, unit: 'MINUTES')   // timeout on this stage
+              timeout(time: 20, unit: 'MINUTES')   // timeout on this stage
             }
             steps {
                 container('main') {
@@ -272,15 +306,15 @@ pipeline {
                                     exit 1
                                 }
                             }
-
                             if ("${params.milvus_mode}" == "standalone") {
                                 sh "helm upgrade --wait --timeout 720s ${env.RELEASE_NAME} milvus/milvus  --set image.all.repository=${params.new_image_repository} --set image.all.tag=${new_image_tag_modified} -f standalone-values.yaml"    
                             }
                             if ("${params.milvus_mode}" == "cluster") {
-                                sh "helm upgrade --wait --timeout 720s ${env.RELEASE_NAME} milvus/milvus  --set image.all.repository=${params.new_image_repository} --set image.all.tag=${new_image_tag_modified} -f cluster-values.yaml"    
+                                sh "helm install --wait --timeout 720s ${env.RELEASE_NAME} milvus/milvus  --set image.all.repository=${params.new_image_repository} --set image.all.tag=${new_image_tag_modified} -f cluster-values.yaml"    
                             }
-                            sh "kubectl wait --for=condition=Ready pod -l app.kubernetes.io/instance=${env.RELEASE_NAME} -n ${env.NAMESPACE} --timeout=360s"
-                            sh "kubectl wait --for=condition=Ready pod -l release=${env.RELEASE_NAME} -n ${env.NAMESPACE} --timeout=360s"                               
+                            sh "sleep 60s"
+                            // sh "kubectl wait --for=condition=Ready pod -l app.kubernetes.io/instance=${env.RELEASE_NAME} -n ${env.NAMESPACE} --timeout=360s"
+                            // sh "kubectl wait --for=condition=Ready pod -l release=${env.RELEASE_NAME} -n ${env.NAMESPACE} --timeout=360s"                               
                             sh "kubectl get pods -o wide|grep ${env.RELEASE_NAME}"
                         }
                     }
@@ -295,16 +329,16 @@ pipeline {
             }
             steps {
                 container('main') {
-                    dir ('tests/python_client/deploy/scripts') {
+                    dir ('tests/python_client/deploy') {
                         script {
                         sh "sleep 60s" // wait loading data for the second deployment to be ready
                         def host = sh(returnStdout: true, script: "kubectl get svc/${env.RELEASE_NAME}-milvus -o jsonpath=\"{.spec.clusterIP}\"").trim()
                         if ("${params.deploy_task}" == "reinstall") {
-                            sh "python3 action_after_reinstall.py --host ${host} --data_size ${params.data_size}"
+                            sh "python3 scripts/action_after_reinstall.py --host ${host} --data_size ${params.data_size}"
                         }
 
                         if ("${params.deploy_task}" == "upgrade") {
-                            sh "python3 action_after_upgrade.py --host ${host} --data_size ${params.data_size}"
+                            sh "python3 scripts/action_after_upgrade.py --host ${host} --data_size ${params.data_size}"
                         }
                         }
                     }

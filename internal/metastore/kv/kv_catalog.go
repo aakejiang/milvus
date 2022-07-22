@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path"
+	"reflect"
 	"strconv"
 
 	"github.com/golang/protobuf/proto"
@@ -27,28 +29,14 @@ type Catalog struct {
 
 func (kc *Catalog) CreateCollection(ctx context.Context, coll *model.Collection, ts typeutil.Timestamp) error {
 	k1 := fmt.Sprintf("%s/%d", metastore.CollectionMetaPrefix, coll.CollectionID)
-	collInfo := ConvertToCollectionPB(coll)
+	collInfo := model.MarshalCollectionModel(coll)
 	v1, err := proto.Marshal(collInfo)
 	if err != nil {
 		log.Error("create collection marshal fail", zap.String("key", k1), zap.Error(err))
 		return err
 	}
 
-	kvs := map[string]string{k1: string(v1)}
-	// save ddOpStr into etcd
-	for k, v := range coll.Extra {
-		if k == metastore.DDOperationPrefix {
-			ddOpStr, err := metastore.EncodeDdOp(v.(model.DdOperation))
-			if err != nil {
-				return fmt.Errorf("encodeDdOperation fail, error = %w", err)
-			}
-			kvs[k] = ddOpStr
-		} else {
-			kvs[k] = v.(string)
-		}
-	}
-
-	err = kc.Snapshot.MultiSave(kvs, ts)
+	err = kc.Snapshot.Save(k1, string(v1), ts)
 	if err != nil {
 		log.Error("create collection persist meta fail", zap.String("key", k1), zap.Error(err))
 		return err
@@ -57,9 +45,9 @@ func (kc *Catalog) CreateCollection(ctx context.Context, coll *model.Collection,
 	return nil
 }
 
-func (kc *Catalog) CreatePartition(ctx context.Context, coll *model.Collection, partition *model.Partition, ts typeutil.Timestamp) error {
+func (kc *Catalog) CreatePartition(ctx context.Context, coll *model.Collection, ts typeutil.Timestamp) error {
 	k1 := fmt.Sprintf("%s/%d", metastore.CollectionMetaPrefix, coll.CollectionID)
-	collInfo := ConvertToCollectionPB(coll)
+	collInfo := model.MarshalCollectionModel(coll)
 	v1, err := proto.Marshal(collInfo)
 	if err != nil {
 		log.Error("create partition marshal fail", zap.String("key", k1), zap.Error(err))
@@ -73,39 +61,19 @@ func (kc *Catalog) CreatePartition(ctx context.Context, coll *model.Collection, 
 		return err
 	}
 
-	// save ddOpStr into etcd
-	ddOpProperties := map[string]string{}
-	for k, v := range coll.Extra {
-		if k == metastore.DDOperationPrefix {
-			ddOpStr, err := metastore.EncodeDdOp(v.(model.DdOperation))
-			if err != nil {
-				return fmt.Errorf("encodeDdOperation fail, error = %w", err)
-			}
-			ddOpProperties[k] = ddOpStr
-		} else {
-			ddOpProperties[k] = v.(string)
-		}
-	}
-	err = kc.Txn.MultiSave(ddOpProperties)
-	if err != nil {
-		// will not panic, missing create msg
-		log.Warn("create partition persist ddop meta fail", zap.Int64("collectionID", coll.CollectionID), zap.Error(err))
-		return err
-	}
-
 	return nil
 }
 
 func (kc *Catalog) CreateIndex(ctx context.Context, col *model.Collection, index *model.Index) error {
 	k1 := path.Join(metastore.CollectionMetaPrefix, strconv.FormatInt(col.CollectionID, 10))
-	v1, err := proto.Marshal(ConvertToCollectionPB(col))
+	v1, err := proto.Marshal(model.MarshalCollectionModel(col))
 	if err != nil {
 		log.Error("create index marshal fail", zap.String("key", k1), zap.Error(err))
 		return err
 	}
 
 	k2 := path.Join(metastore.IndexMetaPrefix, strconv.FormatInt(index.IndexID, 10))
-	v2, err := proto.Marshal(ConvertToIndexPB(index))
+	v2, err := proto.Marshal(model.MarshalIndexModel(index))
 	if err != nil {
 		log.Error("create index marshal fail", zap.String("key", k2), zap.Error(err))
 		return err
@@ -121,22 +89,38 @@ func (kc *Catalog) CreateIndex(ctx context.Context, col *model.Collection, index
 	return nil
 }
 
-func (kc *Catalog) AlterIndex(ctx context.Context, oldIndex *model.Index, newIndex *model.Index) error {
+func (kc *Catalog) alterAddIndex(ctx context.Context, oldIndex *model.Index, newIndex *model.Index) error {
 	kvs := make(map[string]string, len(newIndex.SegmentIndexes))
-	for _, segmentIndex := range newIndex.SegmentIndexes {
-		segment := segmentIndex.Segment
-		k := fmt.Sprintf("%s/%d/%d/%d/%d", SegmentIndexMetaPrefix, newIndex.CollectionID, newIndex.IndexID, segment.PartitionID, segment.SegmentID)
-		segIdxInfo := &pb.SegmentIndexInfo{
-			CollectionID: newIndex.CollectionID,
-			PartitionID:  segment.PartitionID,
-			SegmentID:    segment.SegmentID,
-			BuildID:      segmentIndex.BuildID,
-			EnableIndex:  segmentIndex.EnableIndex,
-			FieldID:      newIndex.FieldID,
-			IndexID:      newIndex.IndexID,
-		}
+	for segID, newSegIdx := range newIndex.SegmentIndexes {
+		oldSegIdx, ok := oldIndex.SegmentIndexes[segID]
+		if !ok || !reflect.DeepEqual(oldSegIdx, newSegIdx) {
+			segment := newSegIdx.Segment
+			k := fmt.Sprintf("%s/%d/%d/%d/%d", metastore.SegmentIndexMetaPrefix, newIndex.CollectionID, newIndex.IndexID, segment.PartitionID, segment.SegmentID)
+			segIdxInfo := &pb.SegmentIndexInfo{
+				CollectionID: newIndex.CollectionID,
+				PartitionID:  segment.PartitionID,
+				SegmentID:    segment.SegmentID,
+				BuildID:      newSegIdx.BuildID,
+				EnableIndex:  newSegIdx.EnableIndex,
+				CreateTime:   newSegIdx.CreateTime,
+				FieldID:      newIndex.FieldID,
+				IndexID:      newIndex.IndexID,
+			}
 
-		v, err := proto.Marshal(segIdxInfo)
+			v, err := proto.Marshal(segIdxInfo)
+			if err != nil {
+				log.Error("alter index marshal fail", zap.String("key", k), zap.Error(err))
+				return err
+			}
+
+			kvs[k] = string(v)
+		}
+	}
+
+	if oldIndex.CreateTime != newIndex.CreateTime || oldIndex.IsDeleted != newIndex.IsDeleted {
+		idxPb := model.MarshalIndexModel(newIndex)
+		k := fmt.Sprintf("%s/%d/%d", metastore.IndexMetaPrefix, newIndex.CollectionID, newIndex.IndexID)
+		v, err := proto.Marshal(idxPb)
 		if err != nil {
 			log.Error("alter index marshal fail", zap.String("key", k), zap.Error(err))
 			return err
@@ -145,18 +129,52 @@ func (kc *Catalog) AlterIndex(ctx context.Context, oldIndex *model.Index, newInd
 		kvs[k] = string(v)
 	}
 
+	if len(kvs) == 0 {
+		return nil
+	}
+
 	err := kc.Txn.MultiSave(kvs)
 	if err != nil {
-		log.Error("alter index persist meta fail", zap.Any("segmentIndex", newIndex.SegmentIndexes), zap.Error(err))
+		log.Error("alter add index persist meta fail", zap.Any("segmentIndex", newIndex.SegmentIndexes), zap.Error(err))
 		return err
 	}
 
 	return nil
 }
 
-func (kc *Catalog) AddAlias(ctx context.Context, coll *model.CollectionAlias, ts typeutil.Timestamp) error {
-	k := fmt.Sprintf("%s/%s", metastore.CollectionAliasMetaPrefix, coll.CollectionAlias)
-	v, err := proto.Marshal(&pb.CollectionInfo{ID: coll.CollectionID, Schema: &schemapb.CollectionSchema{Name: coll.CollectionAlias}})
+func (kc *Catalog) alterDeleteIndex(ctx context.Context, oldIndex *model.Index, newIndex *model.Index) error {
+	delKeys := make([]string, len(newIndex.SegmentIndexes))
+	for _, segIdx := range newIndex.SegmentIndexes {
+		delKeys = append(delKeys, fmt.Sprintf("%s/%d/%d/%d/%d",
+			metastore.SegmentIndexMetaPrefix, newIndex.CollectionID, newIndex.IndexID, segIdx.PartitionID, segIdx.SegmentID))
+	}
+
+	if len(delKeys) == 0 {
+		return nil
+	}
+
+	if err := kc.Txn.MultiRemove(delKeys); err != nil {
+		log.Error("alter delete index persist meta fail", zap.Any("keys", delKeys), zap.Error(err))
+		return err
+	}
+
+	return nil
+}
+
+func (kc *Catalog) AlterIndex(ctx context.Context, oldIndex *model.Index, newIndex *model.Index, alterType metastore.AlterType) error {
+	switch alterType {
+	case metastore.ADD:
+		return kc.alterAddIndex(ctx, oldIndex, newIndex)
+	case metastore.DELETE:
+		return kc.alterDeleteIndex(ctx, oldIndex, newIndex)
+	default:
+		return errors.New("Unknown alter type:" + fmt.Sprintf("%d", alterType))
+	}
+}
+
+func (kc *Catalog) CreateAlias(ctx context.Context, collection *model.Collection, ts typeutil.Timestamp) error {
+	k := fmt.Sprintf("%s/%s", metastore.CollectionAliasMetaPrefix, collection.Aliases[0])
+	v, err := proto.Marshal(&pb.CollectionInfo{ID: collection.CollectionID, Schema: &schemapb.CollectionSchema{Name: collection.Aliases[0]}})
 	if err != nil {
 		log.Error("create alias marshal fail", zap.String("key", k), zap.Error(err))
 		return err
@@ -178,6 +196,7 @@ func (kc *Catalog) CreateCredential(ctx context.Context, credential *model.Crede
 		log.Error("create credential marshal fail", zap.String("key", k), zap.Error(err))
 		return err
 	}
+
 	err = kc.Txn.Save(k, string(v))
 	if err != nil {
 		log.Error("create credential persist meta fail", zap.String("key", k), zap.Error(err))
@@ -202,7 +221,7 @@ func (kc *Catalog) GetCollectionByID(ctx context.Context, collectionID typeutil.
 		return nil, err
 	}
 
-	return ConvertCollectionPBToModel(collMeta, nil), nil
+	return model.UnmarshalCollectionModel(collMeta), nil
 }
 
 func (kc *Catalog) CollectionExists(ctx context.Context, collectionID typeutil.UniqueID, ts typeutil.Timestamp) bool {
@@ -223,7 +242,12 @@ func (kc *Catalog) GetCredential(ctx context.Context, username string) (*model.C
 	if err != nil {
 		return nil, fmt.Errorf("unmarshal credential info err:%w", err)
 	}
+
 	return &model.Credential{Username: username, EncryptedPassword: credentialInfo.EncryptedPassword}, nil
+}
+
+func (kc *Catalog) AlterAlias(ctx context.Context, collection *model.Collection, ts typeutil.Timestamp) error {
+	return kc.CreateAlias(ctx, collection, ts)
 }
 
 func (kc *Catalog) DropCollection(ctx context.Context, collectionInfo *model.Collection, ts typeutil.Timestamp) error {
@@ -245,15 +269,7 @@ func (kc *Catalog) DropCollection(ctx context.Context, collectionInfo *model.Col
 	// Txn operation
 	kvs := map[string]string{}
 	for k, v := range collectionInfo.Extra {
-		if k == metastore.DDOperationPrefix {
-			ddOpStr, err := metastore.EncodeDdOp(v.(model.DdOperation))
-			if err != nil {
-				return fmt.Errorf("encodeDdOperation fail, error = %w", err)
-			}
-			kvs[k] = ddOpStr
-		} else {
-			kvs[k] = v.(string)
-		}
+		kvs[k] = v
 	}
 
 	delMetaKeysTxn := []string{
@@ -271,8 +287,7 @@ func (kc *Catalog) DropCollection(ctx context.Context, collectionInfo *model.Col
 }
 
 func (kc *Catalog) DropPartition(ctx context.Context, collectionInfo *model.Collection, partitionID typeutil.UniqueID, ts typeutil.Timestamp) error {
-	collMeta := ConvertToCollectionPB(collectionInfo)
-
+	collMeta := model.MarshalCollectionModel(collectionInfo)
 	k := path.Join(metastore.CollectionMetaPrefix, strconv.FormatInt(collectionInfo.CollectionID, 10))
 	v, err := proto.Marshal(collMeta)
 	if err != nil {
@@ -298,15 +313,7 @@ func (kc *Catalog) DropPartition(ctx context.Context, collectionInfo *model.Coll
 	// Txn operation
 	metaTxn := map[string]string{}
 	for k, v := range collectionInfo.Extra {
-		if k == metastore.DDOperationPrefix {
-			ddOpStr, err := metastore.EncodeDdOp(v.(model.DdOperation))
-			if err != nil {
-				return fmt.Errorf("encodeDdOperation fail, error = %w", err)
-			}
-			metaTxn[k] = ddOpStr
-		} else {
-			metaTxn[k] = v.(string)
-		}
+		metaTxn[k] = v
 	}
 	err = kc.Txn.MultiSaveAndRemoveWithPrefix(metaTxn, delMetaKeys)
 	if err != nil {
@@ -320,15 +327,15 @@ func (kc *Catalog) DropPartition(ctx context.Context, collectionInfo *model.Coll
 	return nil
 }
 
-func (kc *Catalog) DropIndex(ctx context.Context, collectionInfo *model.Collection, dropIdxID typeutil.UniqueID) error {
-	collMeta := ConvertToCollectionPB(collectionInfo)
-
+func (kc *Catalog) DropIndex(ctx context.Context, collectionInfo *model.Collection, dropIdxID typeutil.UniqueID, ts typeutil.Timestamp) error {
+	collMeta := model.MarshalCollectionModel(collectionInfo)
 	k := path.Join(metastore.CollectionMetaPrefix, strconv.FormatInt(collectionInfo.CollectionID, 10))
 	v, err := proto.Marshal(collMeta)
 	if err != nil {
 		log.Error("drop index marshal fail", zap.String("key", k), zap.Error(err))
 		return err
 	}
+
 	saveMeta := map[string]string{k: string(v)}
 
 	delMeta := []string{
@@ -389,9 +396,10 @@ func (kc *Catalog) GetCollectionByName(ctx context.Context, collectionName strin
 			continue
 		}
 		if colMeta.Schema.Name == collectionName {
-			return ConvertCollectionPBToModel(&colMeta, nil), nil
+			return model.UnmarshalCollectionModel(&colMeta), nil
 		}
 	}
+
 	return nil, fmt.Errorf("can't find collection: %s, at timestamp = %d", collectionName, ts)
 }
 
@@ -413,8 +421,9 @@ func (kc *Catalog) ListCollections(ctx context.Context, ts typeutil.Timestamp) (
 			log.Warn("unmarshal collection info failed", zap.Error(err))
 			continue
 		}
-		colls[collMeta.Schema.Name] = ConvertCollectionPBToModel(&collMeta, nil)
+		colls[collMeta.Schema.Name] = model.UnmarshalCollectionModel(&collMeta)
 	}
+
 	return colls, nil
 }
 
@@ -433,7 +442,7 @@ func (kc *Catalog) ListAliases(ctx context.Context, ts typeutil.Timestamp) ([]*m
 			log.Warn("unmarshal aliases failed", zap.Error(err))
 			continue
 		}
-		colls = append(colls, ConvertCollectionPBToModel(&aliasInfo, nil))
+		colls = append(colls, model.UnmarshalCollectionModel(&aliasInfo))
 	}
 
 	return colls, nil
@@ -445,6 +454,7 @@ func (kc *Catalog) listSegmentIndexes(ctx context.Context) (map[int64]*model.Ind
 		log.Error("list segment index meta fail", zap.String("prefix", metastore.SegmentIndexMetaPrefix), zap.Error(err))
 		return nil, err
 	}
+
 	indexes := make(map[int64]*model.Index, len(values))
 	for _, value := range values {
 		if bytes.Equal([]byte(value), SuffixSnapshotTombstone) {
@@ -458,7 +468,7 @@ func (kc *Catalog) listSegmentIndexes(ctx context.Context) (map[int64]*model.Ind
 			continue
 		}
 
-		newIndex := ConvertSegmentIndexPBToModel(&segmentIndexInfo)
+		newIndex := model.UnmarshalSegmentIndexModel(&segmentIndexInfo)
 		oldIndex, ok := indexes[segmentIndexInfo.IndexID]
 		if ok {
 			for segID, segmentIdxInfo := range newIndex.SegmentIndexes {
@@ -492,7 +502,7 @@ func (kc *Catalog) listIndexMeta(ctx context.Context) (map[int64]*model.Index, e
 			continue
 		}
 
-		index := ConvertIndexPBToModel(&meta)
+		index := model.UnmarshalIndexModel(&meta)
 		if _, ok := indexes[meta.IndexID]; ok {
 			log.Warn("duplicated index id exists in index meta", zap.Int64("index id", meta.IndexID))
 		}
@@ -549,41 +559,10 @@ func (kc *Catalog) ListCredentials(ctx context.Context) ([]string, error) {
 		}
 		usernames = append(usernames, username)
 	}
+
 	return usernames, nil
 }
 
-func (kc *Catalog) UpdateDDOperation(ctx context.Context, ddOp model.DdOperation, isSent bool) error {
-	return kc.Txn.Save(metastore.DDMsgSendPrefix, strconv.FormatBool(true))
-}
-
-func (kc *Catalog) IsDDMsgSent(ctx context.Context) (bool, error) {
-	value, err := kc.Txn.Load(metastore.DDMsgSendPrefix)
-	if err != nil {
-		log.Error("load dd-msg-send from kv failed", zap.Error(err))
-		return true, err
-	}
-	flag, err := strconv.ParseBool(value)
-	if err != nil {
-		log.Error("invalid value %s", zap.String("is_sent", value))
-		return true, err
-	}
-	return flag, nil
-}
-
-func (kc *Catalog) LoadDdOperation(ctx context.Context) (model.DdOperation, error) {
-	ddOpStr, err := kc.Txn.Load(metastore.DDOperationPrefix)
-	if err != nil {
-		log.Error("load dd-operation from kv failed", zap.Error(err))
-		return model.DdOperation{}, err
-	}
-	var ddOp metastore.DdOperation
-	if err = json.Unmarshal([]byte(ddOpStr), &ddOp); err != nil {
-		log.Error("unmarshal dd operation failed", zap.Error(err))
-		return model.DdOperation{}, err
-	}
-	return ConvertDdOperationToModel(ddOp), nil
-}
-
 func (kc *Catalog) Close() {
-	panic("implement me")
+	// do nothing
 }

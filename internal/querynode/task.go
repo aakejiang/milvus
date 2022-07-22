@@ -21,7 +21,6 @@ import (
 	"errors"
 	"fmt"
 	"runtime/debug"
-	"time"
 
 	"go.uber.org/zap"
 
@@ -173,17 +172,19 @@ func (w *watchDmChannelsTask) Execute(ctx context.Context) (err error) {
 	unFlushedSegments := make([]*queryPb.SegmentLoadInfo, 0)
 	unFlushedSegmentIDs := make([]UniqueID, 0)
 	for _, info := range w.req.Infos {
-		for _, ufInfo := range info.UnflushedSegments {
+		for _, ufInfoID := range info.GetUnflushedSegmentIds() {
 			// unFlushed segment may not have binLogs, skip loading
+			ufInfo := w.req.SegmentInfos[ufInfoID]
 			if len(ufInfo.Binlogs) > 0 {
 				unFlushedSegments = append(unFlushedSegments, &queryPb.SegmentLoadInfo{
-					SegmentID:    ufInfo.ID,
-					PartitionID:  ufInfo.PartitionID,
-					CollectionID: ufInfo.CollectionID,
-					BinlogPaths:  ufInfo.Binlogs,
-					NumOfRows:    ufInfo.NumOfRows,
-					Statslogs:    ufInfo.Statslogs,
-					Deltalogs:    ufInfo.Deltalogs,
+					SegmentID:     ufInfo.ID,
+					PartitionID:   ufInfo.PartitionID,
+					CollectionID:  ufInfo.CollectionID,
+					BinlogPaths:   ufInfo.Binlogs,
+					NumOfRows:     ufInfo.NumOfRows,
+					Statslogs:     ufInfo.Statslogs,
+					Deltalogs:     ufInfo.Deltalogs,
+					InsertChannel: ufInfo.InsertChannel,
 				})
 				unFlushedSegmentIDs = append(unFlushedSegmentIDs, ufInfo.ID)
 			}
@@ -261,14 +262,16 @@ func (w *watchDmChannelsTask) Execute(ctx context.Context) (err error) {
 	// unFlushed segments before check point should be filtered out.
 	unFlushedCheckPointInfos := make([]*datapb.SegmentInfo, 0)
 	for _, info := range w.req.Infos {
-		unFlushedCheckPointInfos = append(unFlushedCheckPointInfos, info.UnflushedSegments...)
+		for _, ufsID := range info.GetUnflushedSegmentIds() {
+			unFlushedCheckPointInfos = append(unFlushedCheckPointInfos, w.req.SegmentInfos[ufsID])
+		}
 	}
 	w.node.metaReplica.addExcludedSegments(collectionID, unFlushedCheckPointInfos)
-	unflushedSegmentIDs := make([]UniqueID, 0)
-	for i := 0; i < len(unFlushedCheckPointInfos); i++ {
-		unflushedSegmentIDs = append(unflushedSegmentIDs, unFlushedCheckPointInfos[i].GetID())
+	unflushedSegmentIDs := make([]UniqueID, len(unFlushedCheckPointInfos))
+	for i, segInfo := range unFlushedCheckPointInfos {
+		unflushedSegmentIDs[i] = segInfo.GetID()
 	}
-	log.Info("watchDMChannel, add check points info for unFlushed segments done",
+	log.Info("watchDMChannel, add check points info for unflushed segments done",
 		zap.Int64("collectionID", collectionID),
 		zap.Any("unflushedSegmentIDs", unflushedSegmentIDs),
 	)
@@ -277,7 +280,8 @@ func (w *watchDmChannelsTask) Execute(ctx context.Context) (err error) {
 	// flushed segments with later check point than seekPosition should be filtered out.
 	flushedCheckPointInfos := make([]*datapb.SegmentInfo, 0)
 	for _, info := range w.req.Infos {
-		for _, flushedSegment := range info.FlushedSegments {
+		for _, flushedSegmentID := range info.GetFlushedSegmentIds() {
+			flushedSegment := w.req.SegmentInfos[flushedSegmentID]
 			for _, position := range channel2SeekPosition {
 				if flushedSegment.DmlPosition != nil &&
 					flushedSegment.DmlPosition.ChannelName == position.ChannelName &&
@@ -288,16 +292,21 @@ func (w *watchDmChannelsTask) Execute(ctx context.Context) (err error) {
 		}
 	}
 	w.node.metaReplica.addExcludedSegments(collectionID, flushedCheckPointInfos)
+	flushedSegmentIDs := make([]UniqueID, len(flushedCheckPointInfos))
+	for i, segInfo := range flushedCheckPointInfos {
+		flushedSegmentIDs[i] = segInfo.GetID()
+	}
 	log.Info("watchDMChannel, add check points info for flushed segments done",
 		zap.Int64("collectionID", collectionID),
-		zap.Any("flushedCheckPointInfos", flushedCheckPointInfos),
+		zap.Any("flushedSegmentIDs", flushedSegmentIDs),
 	)
 
 	// add excluded segments for dropped segments,
 	// dropped segments with later check point than seekPosition should be filtered out.
 	droppedCheckPointInfos := make([]*datapb.SegmentInfo, 0)
 	for _, info := range w.req.Infos {
-		for _, droppedSegment := range info.DroppedSegments {
+		for _, droppedSegmentID := range info.GetDroppedSegmentIds() {
+			droppedSegment := w.req.SegmentInfos[droppedSegmentID]
 			for _, position := range channel2SeekPosition {
 				if droppedSegment != nil &&
 					droppedSegment.DmlPosition.ChannelName == position.ChannelName &&
@@ -308,9 +317,13 @@ func (w *watchDmChannelsTask) Execute(ctx context.Context) (err error) {
 		}
 	}
 	w.node.metaReplica.addExcludedSegments(collectionID, droppedCheckPointInfos)
+	droppedSegmentIDs := make([]UniqueID, len(droppedCheckPointInfos))
+	for i, segInfo := range droppedCheckPointInfos {
+		droppedSegmentIDs[i] = segInfo.GetID()
+	}
 	log.Info("watchDMChannel, add check points info for dropped segments done",
 		zap.Int64("collectionID", collectionID),
-		zap.Any("droppedCheckPointInfos", droppedCheckPointInfos),
+		zap.Any("droppedSegmentIDs", droppedSegmentIDs),
 	)
 
 	// add flow graph
@@ -556,12 +569,6 @@ const (
 
 func (r *releaseCollectionTask) Execute(ctx context.Context) error {
 	log.Info("Execute release collection task", zap.Any("collectionID", r.req.CollectionID))
-	// sleep to wait for query tasks done
-	const gracefulReleaseTime = 1
-	time.Sleep(gracefulReleaseTime * time.Second)
-	log.Info("Starting release collection...",
-		zap.Any("collectionID", r.req.CollectionID),
-	)
 
 	collection, err := r.node.metaReplica.getCollectionByID(r.req.CollectionID)
 	if err != nil {
@@ -607,10 +614,6 @@ func (r *releasePartitionsTask) Execute(ctx context.Context) error {
 	log.Info("Execute release partition task",
 		zap.Any("collectionID", r.req.CollectionID),
 		zap.Any("partitionIDs", r.req.PartitionIDs))
-
-	// sleep to wait for query tasks done
-	const gracefulReleaseTime = 1
-	time.Sleep(gracefulReleaseTime * time.Second)
 
 	_, err := r.node.metaReplica.getCollectionByID(r.req.CollectionID)
 	if err != nil {

@@ -71,6 +71,8 @@ func newDmlChannels(ctx context.Context, factory msgstream.Factory, chanNamePref
 	}
 	log.Debug("init dml channels", zap.Int64("num", chanNum))
 	metrics.RootCoordNumOfDMLChannel.Add(float64(chanNum))
+	metrics.RootCoordNumOfMsgStream.Add(float64(chanNum))
+
 	return d
 }
 
@@ -110,7 +112,7 @@ func (d *dmlChannels) broadcast(chanNames []string, pack *msgstream.MsgPack) err
 		dms.mutex.RLock()
 		if dms.refcnt > 0 {
 			if err := dms.ms.Broadcast(pack); err != nil {
-				log.Error("Broadcast failed", zap.String("chanName", chanName))
+				log.Error("Broadcast failed", zap.Error(err), zap.String("chanName", chanName))
 				dms.mutex.RUnlock()
 				return err
 			}
@@ -134,7 +136,7 @@ func (d *dmlChannels) broadcastMark(chanNames []string, pack *msgstream.MsgPack)
 		if dms.refcnt > 0 {
 			ids, err := dms.ms.BroadcastMark(pack)
 			if err != nil {
-				log.Error("BroadcastMark failed", zap.String("chanName", chanName))
+				log.Error("BroadcastMark failed", zap.Error(err), zap.String("chanName", chanName))
 				dms.mutex.RUnlock()
 				return result, err
 			}
@@ -163,7 +165,6 @@ func (d *dmlChannels) addChannels(names ...string) {
 		dms.refcnt++
 		dms.mutex.Unlock()
 	}
-	metrics.RootCoordNumOfDMLChannel.Inc()
 }
 
 func (d *dmlChannels) removeChannels(names ...string) {
@@ -183,7 +184,6 @@ func (d *dmlChannels) removeChannels(names ...string) {
 		}
 		dms.mutex.Unlock()
 	}
-	metrics.RootCoordNumOfDMLChannel.Dec()
 }
 
 func genChannelName(prefix string, idx int64) string {

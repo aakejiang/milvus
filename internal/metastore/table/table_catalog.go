@@ -2,13 +2,13 @@ package table
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
 	"github.com/milvus-io/milvus/internal/log"
+	"github.com/milvus-io/milvus/internal/metastore"
 	"github.com/milvus-io/milvus/internal/metastore/model"
 	"github.com/milvus-io/milvus/internal/util/contextutil"
 	"github.com/milvus-io/milvus/internal/util/typeutil"
@@ -408,10 +408,11 @@ func (tc *TableCatalog) DropCollection(ctx context.Context, collection *model.Co
 	})
 }
 
-func (tc *TableCatalog) CreatePartition(ctx context.Context, coll *model.Collection, partition *model.Partition, ts typeutil.Timestamp) error {
+func (tc *TableCatalog) CreatePartition(ctx context.Context, coll *model.Collection, ts typeutil.Timestamp) error {
 	tenantID := contextutil.TenantID(ctx)
 	// sql 1
 	sqlStr1 := "insert into partitions(tenant_id, partition_id, partition_name, partition_created_timestamp, collection_id, ts) values (:tenant_id, :partition_id, :partition_name, :partition_created_timestamp, :collection_id, :ts)"
+	partition := coll.Partitions[0]
 	p := Partition{
 		TenantID:                  &tenantID,
 		PartitionID:               partition.PartitionID,
@@ -533,7 +534,7 @@ func (tc *TableCatalog) CreateIndex(ctx context.Context, col *model.Collection, 
 	})
 }
 
-func (tc *TableCatalog) AlterIndex(ctx context.Context, oldIndex *model.Index, newIndex *model.Index) error {
+func (tc *TableCatalog) AlterIndex(ctx context.Context, oldIndex *model.Index, newIndex *model.Index, alterType metastore.AlterType) error {
 	// no need updating table indexes
 	sqlStr := "update segment_indexes set partition_id=?, build_id=?, enable_index=?, index_file_paths=?, index_size=? where collection_id=? and segment_id=? and field_id=? and index_id=?"
 	tenantID := contextutil.TenantID(ctx)
@@ -559,7 +560,7 @@ func (tc *TableCatalog) AlterIndex(ctx context.Context, oldIndex *model.Index, n
 	return nil
 }
 
-func (tc *TableCatalog) DropIndex(ctx context.Context, collectionInfo *model.Collection, dropIdxID typeutil.UniqueID) error {
+func (tc *TableCatalog) DropIndex(ctx context.Context, collectionInfo *model.Collection, dropIdxID typeutil.UniqueID, ts typeutil.Timestamp) error {
 	tenantID := contextutil.TenantID(ctx)
 	return WithTransaction(tc.DB, func(tx Transaction) error {
 		// sql 1
@@ -664,13 +665,13 @@ func (tc *TableCatalog) ListIndexes(ctx context.Context) ([]*model.Index, error)
 	return indexes, nil
 }
 
-func (tc *TableCatalog) AddAlias(ctx context.Context, coll *model.CollectionAlias, ts typeutil.Timestamp) error {
+func (tc *TableCatalog) CreateAlias(ctx context.Context, collection *model.Collection, ts typeutil.Timestamp) error {
 	sqlStr := "insert into collection_aliases(tenant_id, collection_id, collection_alias, ts) values (:tenant_id, :collection_id, :collection_alias, :ts)"
 	tenantID := contextutil.TenantID(ctx)
 	collAlias := CollectionAlias{
 		TenantID:        &tenantID,
-		CollectionID:    coll.CollectionID,
-		CollectionAlias: coll.CollectionAlias,
+		CollectionID:    collection.CollectionID,
+		CollectionAlias: collection.Aliases[0],
 		Ts:              ts,
 	}
 	rs, err := tc.DB.NamedExec(sqlStr, collAlias)
@@ -717,6 +718,10 @@ func (tc *TableCatalog) DropAlias(ctx context.Context, collectionID typeutil.Uni
 		log.Debug("table collection_aliases RowsAffected", zap.Any("rows", n))
 	}
 
+	return nil
+}
+
+func (tc *TableCatalog) AlterAlias(ctx context.Context, collection *model.Collection, ts typeutil.Timestamp) error {
 	return nil
 }
 
@@ -859,36 +864,6 @@ func (tc *TableCatalog) ListCredentials(ctx context.Context) ([]string, error) {
 		return nil, err
 	}
 	return usernames, nil
-}
-
-func (tc *TableCatalog) IsDDMsgSent(ctx context.Context) (bool, error) {
-	ddOp, err := tc.LoadDdOperation(ctx)
-	if ddOp == (model.DdOperation{}) || err != nil {
-		return true, err
-	}
-	return ddOp.IsSent, nil
-}
-
-func (tc *TableCatalog) LoadDdOperation(ctx context.Context) (model.DdOperation, error) {
-	var ddOp DdOperation
-	sqlStr := "select * from dd_msg_send order by updated_at desc limit 1"
-	err := tc.DB.Get(&ddOp, sqlStr)
-	if err != nil && err != sql.ErrNoRows { // err.Error() != "sql: no rows in result set"
-		log.Error("get dd-operation failed", zap.Error(err))
-		return model.DdOperation{}, err
-	}
-
-	return ConvertDdOperationDBToModel(ddOp), nil
-}
-
-func (tc *TableCatalog) UpdateDDOperation(ctx context.Context, ddOp model.DdOperation, isSent bool) error {
-	sql := "update dd_msg_send set is_sent=? where operation_type=? and operation_body=?"
-	_, err := tc.DB.Exec(sql, isSent, ddOp.Type, ddOp.Body)
-	if err != nil {
-		log.Error("update dd_msg_send failed", zap.Error(err))
-		return err
-	}
-	return nil
 }
 
 func (tc *TableCatalog) Close() {

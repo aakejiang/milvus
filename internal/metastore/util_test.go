@@ -19,6 +19,8 @@ package metastore
 import (
 	"testing"
 
+	"github.com/milvus-io/milvus/internal/common"
+
 	"github.com/milvus-io/milvus/internal/metastore/model"
 	"github.com/milvus-io/milvus/internal/mq/msgstream"
 	"github.com/milvus-io/milvus/internal/proto/commonpb"
@@ -79,10 +81,10 @@ func Test_GetFieldSchemaByIndexID(t *testing.T) {
 				FieldID: 1,
 			},
 		},
-		FieldIndexes: []*model.Index{
+		FieldIDToIndexID: []common.Int64Tuple{
 			{
-				FieldID: 1,
-				IndexID: 2,
+				Key:   1,
+				Value: 2,
 			},
 		},
 	}

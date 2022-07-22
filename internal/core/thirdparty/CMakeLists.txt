@@ -57,14 +57,25 @@ add_subdirectory( yaml-cpp )
 # ****************************** Thirdparty opentracing ***************************************
 if ( MILVUS_WITH_OPENTRACING )
     add_subdirectory( opentracing )
-endif()
 
+endif()
 add_subdirectory( protobuf )
 add_subdirectory( boost_ext )
 add_subdirectory( arrow )
+add_subdirectory( rocksdb )
 
 # ******************************* Thridparty marisa ********************************
 # TODO: support win.
 if ( LINUX OR APPLE)
     add_subdirectory( marisa )
 endif()
+
+# ******************************* Thridparty jemalloc ********************************
+if ( LINUX )
+    add_subdirectory( jemalloc )
+endif()
+
+# ******************************* Thridparty rapidxml ********************************
+#if ( LINUX )
+#    add_subdirectory( rapidxml )
+#endif()

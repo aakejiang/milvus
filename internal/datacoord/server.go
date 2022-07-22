@@ -44,6 +44,7 @@ import (
 	"github.com/milvus-io/milvus/internal/proto/milvuspb"
 	"github.com/milvus-io/milvus/internal/types"
 	"github.com/milvus-io/milvus/internal/util/dependency"
+	"github.com/milvus-io/milvus/internal/util/funcutil"
 	"github.com/milvus-io/milvus/internal/util/logutil"
 	"github.com/milvus-io/milvus/internal/util/metricsinfo"
 	"github.com/milvus-io/milvus/internal/util/paramtable"
@@ -129,8 +130,9 @@ type Server struct {
 
 	session   *sessionutil.Session
 	dnEventCh <-chan *sessionutil.SessionEvent
-	icEventCh <-chan *sessionutil.SessionEvent
+	//icEventCh <-chan *sessionutil.SessionEvent
 	qcEventCh <-chan *sessionutil.SessionEvent
+	rcEventCh <-chan *sessionutil.SessionEvent
 
 	dataNodeCreator        dataNodeCreatorFunc
 	rootCoordClientCreator rootCoordCreatorFunc
@@ -281,15 +283,16 @@ func (s *Server) Start() error {
 	}
 
 	s.allocator = newRootCoordAllocator(s.rootCoordClient)
+
+	if err = s.initServiceDiscovery(); err != nil {
+		return err
+	}
+
 	if Params.DataCoordCfg.EnableCompaction {
 		s.createCompactionHandler()
 		s.createCompactionTrigger()
 	}
-
 	s.startSegmentManager()
-	if err = s.initServiceDiscovery(); err != nil {
-		return err
-	}
 
 	if err = s.initGarbageCollection(); err != nil {
 		return err
@@ -332,7 +335,7 @@ func (s *Server) SetEtcdClient(client *clientv3.Client) {
 }
 
 func (s *Server) createCompactionHandler() {
-	s.compactionHandler = newCompactionPlanHandler(s.sessionManager, s.channelManager, s.meta, s.allocator, s.flushCh)
+	s.compactionHandler = newCompactionPlanHandler(s.sessionManager, s.channelManager, s.meta, s.allocator, s.flushCh, s.segReferManager)
 	s.compactionHandler.start()
 }
 
@@ -341,7 +344,7 @@ func (s *Server) stopCompactionHandler() {
 }
 
 func (s *Server) createCompactionTrigger() {
-	s.compactionTrigger = newCompactionTrigger(s.meta, s.compactionHandler, s.allocator)
+	s.compactionTrigger = newCompactionTrigger(s.meta, s.compactionHandler, s.allocator, s.segReferManager)
 	s.compactionTrigger.start()
 }
 
@@ -430,26 +433,37 @@ func (s *Server) initServiceDiscovery() error {
 	// TODO implement rewatch logic
 	s.dnEventCh = s.session.WatchServices(typeutil.DataNodeRole, rev+1, nil)
 
-	icSessions, icRevision, err := s.session.GetSessions(typeutil.IndexCoordRole)
-	if err != nil {
-		log.Error("DataCoord get IndexCoord session failed", zap.Error(err))
-		return err
-	}
-	serverIDs := make([]UniqueID, 0, len(icSessions))
-	for _, session := range icSessions {
-		serverIDs = append(serverIDs, session.ServerID)
-	}
-	s.icEventCh = s.session.WatchServices(typeutil.IndexCoordRole, icRevision+1, nil)
+	//icSessions, icRevision, err := s.session.GetSessions(typeutil.IndexCoordRole)
+	//if err != nil {
+	//	log.Error("DataCoord get IndexCoord session failed", zap.Error(err))
+	//	return err
+	//}
+	//serverIDs := make([]UniqueID, 0, len(icSessions))
+	//for _, session := range icSessions {
+	//	serverIDs = append(serverIDs, session.ServerID)
+	//}
+	//s.icEventCh = s.session.WatchServices(typeutil.IndexCoordRole, icRevision+1, nil)
 
 	qcSessions, qcRevision, err := s.session.GetSessions(typeutil.QueryCoordRole)
 	if err != nil {
 		log.Error("DataCoord get QueryCoord session failed", zap.Error(err))
 		return err
 	}
+	serverIDs := make([]UniqueID, 0, len(qcSessions))
 	for _, session := range qcSessions {
 		serverIDs = append(serverIDs, session.ServerID)
 	}
 	s.qcEventCh = s.session.WatchServices(typeutil.QueryCoordRole, qcRevision+1, nil)
+
+	rcSessions, rcRevision, err := s.session.GetSessions(typeutil.RootCoordRole)
+	if err != nil {
+		log.Error("DataCoord get RootCoord session failed", zap.Error(err))
+		return err
+	}
+	for _, session := range rcSessions {
+		serverIDs = append(serverIDs, session.ServerID)
+	}
+	s.rcEventCh = s.session.WatchServices(typeutil.RootCoordRole, rcRevision+1, nil)
 
 	s.segReferManager, err = NewSegmentReferenceManager(s.kvClient, serverIDs)
 	return err
@@ -457,7 +471,7 @@ func (s *Server) initServiceDiscovery() error {
 
 func (s *Server) startSegmentManager() {
 	if s.segmentManager == nil {
-		s.segmentManager = newSegmentManager(s.meta, s.allocator)
+		s.segmentManager = newSegmentManager(s.meta, s.allocator, s.rootCoordClient)
 	}
 }
 
@@ -563,7 +577,9 @@ func (s *Server) handleTimetickMessage(ctx context.Context, ttMsg *msgstream.Dat
 	}
 
 	utcT, _ := tsoutil.ParseHybridTs(ts)
-	metrics.DataCoordSyncEpoch.WithLabelValues(ch).Set(float64(utcT))
+
+	pChannelName := funcutil.ToPhysicalChannel(ch)
+	metrics.DataCoordSyncEpoch.WithLabelValues(pChannelName).Set(float64(utcT))
 
 	s.updateSegmentStatistics(ttMsg.GetSegmentsStats())
 
@@ -626,7 +642,8 @@ func (s *Server) getStaleSegmentsInfo(ch string) []*SegmentInfo {
 		return isSegmentHealthy(info) &&
 			info.GetInsertChannel() == ch &&
 			!info.lastFlushTime.IsZero() &&
-			time.Since(info.lastFlushTime).Minutes() >= segmentTimedFlushDuration
+			time.Since(info.lastFlushTime).Minutes() >= segmentTimedFlushDuration &&
+			info.GetNumOfRows() != 0
 	})
 }
 
@@ -657,6 +674,36 @@ func (s *Server) startWatchService(ctx context.Context) {
 	go s.watchService(ctx)
 }
 
+func (s *Server) stopServiceWatch() {
+	// ErrCompacted is handled inside SessionWatcher, which means there is some other error occurred, closing server.
+	logutil.Logger(s.ctx).Error("watch service channel closed", zap.Int64("serverID", s.session.ServerID))
+	go s.Stop()
+	if s.session.TriggerKill {
+		if p, err := os.FindProcess(os.Getpid()); err == nil {
+			p.Signal(syscall.SIGINT)
+		}
+	}
+}
+
+func (s *Server) processSessionEvent(ctx context.Context, role string, event *sessionutil.SessionEvent) {
+	switch event.EventType {
+	case sessionutil.SessionAddEvent:
+		log.Info("there is a new service online",
+			zap.String("server role", role),
+			zap.Int64("server ID", event.Session.ServerID))
+
+	case sessionutil.SessionDelEvent:
+		log.Warn("there is service offline",
+			zap.String("server role", role),
+			zap.Int64("server ID", event.Session.ServerID))
+		if err := retry.Do(ctx, func() error {
+			return s.segReferManager.ReleaseSegmentsLockByNodeID(event.Session.ServerID)
+		}, retry.Attempts(100)); err != nil {
+			panic(err)
+		}
+	}
+}
+
 // watchService watches services.
 func (s *Server) watchService(ctx context.Context) {
 	defer logutil.LogPanic()
@@ -668,75 +715,35 @@ func (s *Server) watchService(ctx context.Context) {
 			return
 		case event, ok := <-s.dnEventCh:
 			if !ok {
-				// ErrCompacted in handled inside SessionWatcher
-				// So there is some other error occurred, closing DataCoord server
-				logutil.Logger(s.ctx).Error("watch service channel closed", zap.Int64("serverID", s.session.ServerID))
-				go s.Stop()
-				if s.session.TriggerKill {
-					if p, err := os.FindProcess(os.Getpid()); err == nil {
-						p.Signal(syscall.SIGINT)
-					}
-				}
+				s.stopServiceWatch()
 				return
 			}
 			if err := s.handleSessionEvent(ctx, event); err != nil {
 				go func() {
 					if err := s.Stop(); err != nil {
-						log.Warn("datacoord server stop error", zap.Error(err))
+						log.Warn("DataCoord server stop error", zap.Error(err))
 					}
 				}()
 				return
 			}
-		case event, ok := <-s.icEventCh:
-			if !ok {
-				// ErrCompacted in handled inside SessionWatcher
-				// So there is some other error occurred, closing DataCoord server
-				logutil.Logger(s.ctx).Error("watch service channel closed", zap.Int64("serverID", s.session.ServerID))
-				go s.Stop()
-				if s.session.TriggerKill {
-					if p, err := os.FindProcess(os.Getpid()); err == nil {
-						p.Signal(syscall.SIGINT)
-					}
-				}
-				return
-			}
-			switch event.EventType {
-			case sessionutil.SessionAddEvent:
-				log.Info("there is a new IndexCoord online", zap.Int64("serverID", event.Session.ServerID))
-
-			case sessionutil.SessionDelEvent:
-				log.Warn("there is IndexCoord offline", zap.Int64("serverID", event.Session.ServerID))
-				if err := retry.Do(ctx, func() error {
-					return s.segReferManager.ReleaseSegmentsLockByNodeID(event.Session.ServerID)
-				}, retry.Attempts(100)); err != nil {
-					panic(err)
-				}
-			}
+		//case event, ok := <-s.icEventCh:
+		//	if !ok {
+		//		s.stopServiceWatch()
+		//		return
+		//	}
+		//	s.processSessionEvent(ctx, "IndexCoord", event)
 		case event, ok := <-s.qcEventCh:
 			if !ok {
-				// ErrCompacted in handled inside SessionWatcher
-				// So there is some other error occurred, closing DataCoord server
-				logutil.Logger(s.ctx).Error("watch service channel closed", zap.Int64("serverID", s.session.ServerID))
-				go s.Stop()
-				if s.session.TriggerKill {
-					if p, err := os.FindProcess(os.Getpid()); err == nil {
-						p.Signal(syscall.SIGINT)
-					}
-				}
+				s.stopServiceWatch()
 				return
 			}
-			switch event.EventType {
-			case sessionutil.SessionAddEvent:
-				log.Info("there is a new QueryCoord online", zap.Int64("serverID", event.Session.ServerID))
-
-			case sessionutil.SessionDelEvent:
-				log.Warn("there is QueryCoord offline", zap.Int64("serverID", event.Session.ServerID))
-				if err := retry.Do(ctx, func() error {
-					return s.segReferManager.ReleaseSegmentsLockByNodeID(event.Session.ServerID)
-				}, retry.Attempts(100)); err != nil {
-					panic(err)
-				}
+			s.processSessionEvent(ctx, "QueryCoord", event)
+		case event, ok := <-s.rcEventCh:
+			if !ok {
+				s.stopServiceWatch()
+				return
 			}
+			s.processSessionEvent(ctx, "RootCoord", event)
 		}
 	}
 }
@@ -761,7 +768,7 @@ func (s *Server) handleSessionEvent(ctx context.Context, event *sessionutil.Sess
 			zap.String("address", info.Address),
 			zap.Int64("serverID", info.Version))
 		if err := s.cluster.Register(node); err != nil {
-			log.Warn("failed to regisger node", zap.Int64("id", node.NodeID), zap.String("address", node.Address), zap.Error(err))
+			log.Warn("failed to register node", zap.Int64("id", node.NodeID), zap.String("address", node.Address), zap.Error(err))
 			return err
 		}
 		s.metricsCacheManager.InvalidateSystemInfoMetrics()
@@ -770,7 +777,7 @@ func (s *Server) handleSessionEvent(ctx context.Context, event *sessionutil.Sess
 			zap.String("address", info.Address),
 			zap.Int64("serverID", info.Version))
 		if err := s.cluster.UnRegister(node); err != nil {
-			log.Warn("failed to deregisger node", zap.Int64("id", node.NodeID), zap.String("address", node.Address), zap.Error(err))
+			log.Warn("failed to deregister node", zap.Int64("id", node.NodeID), zap.String("address", node.Address), zap.Error(err))
 			return err
 		}
 		s.metricsCacheManager.InvalidateSystemInfoMetrics()

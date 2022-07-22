@@ -44,8 +44,7 @@ SegmentGrowingImpl::mask_with_delete(BitsetType& bitset, int64_t ins_barrier, Ti
     if (del_barrier == 0) {
         return;
     }
-    auto bitmap_holder =
-        get_deleted_bitmap(del_barrier, ins_barrier, deleted_record_, insert_record_, pk2offset_, timestamp);
+    auto bitmap_holder = get_deleted_bitmap(del_barrier, ins_barrier, deleted_record_, insert_record_, timestamp);
     if (!bitmap_holder || !bitmap_holder->bitmap_ptr) {
         return;
     }
@@ -91,7 +90,7 @@ SegmentGrowingImpl::Insert(int64_t reserved_offset,
     std::vector<PkType> pks(size);
     ParsePksFromFieldData(pks, insert_data->fields_data(field_id_to_offset[field_id]));
     for (int i = 0; i < size; ++i) {
-        pk2offset_.insert(std::make_pair(pks[i], reserved_offset + i));
+        insert_record_.insert_pk(pks[i], reserved_offset + i);
     }
 
     // step 5: update small indexes
@@ -158,11 +157,10 @@ SegmentGrowingImpl::LoadDeletedRecord(const LoadDeletedRecordInfo& info) {
     auto timestamps = reinterpret_cast<const Timestamp*>(info.timestamps);
 
     // step 2: fill pks and timestamps
-    deleted_record_.pks_.set_data_raw(0, pks.data(), size);
-    deleted_record_.timestamps_.set_data_raw(0, timestamps, size);
-    deleted_record_.ack_responder_.AddSegment(0, size);
-    deleted_record_.reserved.fetch_add(size);
-    deleted_record_.record_size_ = size;
+    auto reserved_begin = deleted_record_.reserved.fetch_add(size);
+    deleted_record_.pks_.set_data_raw(reserved_begin, pks.data(), size);
+    deleted_record_.timestamps_.set_data_raw(reserved_begin, timestamps, size);
+    deleted_record_.ack_responder_.AddSegment(reserved_begin, reserved_begin + size);
 }
 
 SpanBase
@@ -179,7 +177,7 @@ SegmentGrowingImpl::num_chunk() const {
 
 void
 SegmentGrowingImpl::vector_search(int64_t vec_count,
-                                  query::SearchInfo search_info,
+                                  query::SearchInfo& search_info,
                                   const void* query_data,
                                   int64_t query_count,
                                   Timestamp timestamp,
@@ -359,25 +357,22 @@ SegmentGrowingImpl::search_ids(const IdArray& id_array, Timestamp timestamp) con
     auto res_id_arr = std::make_unique<IdArray>();
     std::vector<SegOffset> res_offsets;
     for (auto pk : pks) {
-        auto [iter_b, iter_e] = pk2offset_.equal_range(pk);
-        for (auto iter = iter_b; iter != iter_e; ++iter) {
-            auto offset = SegOffset(iter->second);
-            if (insert_record_.timestamps_[offset.get()] <= timestamp) {
-                switch (data_type) {
-                    case DataType::INT64: {
-                        res_id_arr->mutable_int_id()->add_data(std::get<int64_t>(pk));
-                        break;
-                    }
-                    case DataType::VARCHAR: {
-                        res_id_arr->mutable_str_id()->add_data(std::get<std::string>(pk));
-                        break;
-                    }
-                    default: {
-                        PanicInfo("unsupported type");
-                    }
+        auto segOffsets = insert_record_.search_pk(pk, timestamp);
+        for (auto offset : segOffsets) {
+            switch (data_type) {
+                case DataType::INT64: {
+                    res_id_arr->mutable_int_id()->add_data(std::get<int64_t>(pk));
+                    break;
                 }
-                res_offsets.push_back(offset);
+                case DataType::VARCHAR: {
+                    res_id_arr->mutable_str_id()->add_data(std::get<std::string>(pk));
+                    break;
+                }
+                default: {
+                    PanicInfo("unsupported type");
+                }
             }
+            res_offsets.push_back(offset);
         }
     }
     return {std::move(res_id_arr), std::move(res_offsets)};

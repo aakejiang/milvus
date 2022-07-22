@@ -200,7 +200,7 @@ func TestSegment_retrieve(t *testing.T) {
 	// }
 	planExpr, err := proto.Marshal(planNode)
 	assert.NoError(t, err)
-	plan, err := createRetrievePlanByExpr(collection, planExpr, 100)
+	plan, err := createRetrievePlanByExpr(collection, planExpr, 100, 100)
 	defer plan.delete()
 	assert.NoError(t, err)
 
@@ -246,7 +246,7 @@ func TestSegment_getDeletedCount(t *testing.T) {
 
 	var deletedCount = segment.getDeletedCount()
 	// TODO: assert.Equal(t, deletedCount, len(ids))
-	assert.Equal(t, deletedCount, int64(0))
+	assert.Equal(t, deletedCount, int64(len(pks)))
 
 	deleteCollection(collection)
 

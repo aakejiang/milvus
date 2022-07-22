@@ -22,6 +22,9 @@ FILE_COVERAGE_HTML="go_coverage.html"
 set -ex
 echo "mode: atomic" > ${FILE_COVERAGE_INFO}
 
+BASEDIR=$(dirname "$0")
+source $BASEDIR/setenv.sh
+
 # run unittest
 echo "Running unittest under ./internal"
 if [[ $(uname -s) == "Darwin" && "$(uname -m)" == "arm64" ]]; then

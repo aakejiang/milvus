@@ -26,9 +26,11 @@ import (
 	"github.com/milvus-io/milvus/internal/log"
 	"github.com/milvus-io/milvus/internal/metrics"
 	"github.com/milvus-io/milvus/internal/mq/msgstream"
+	"github.com/milvus-io/milvus/internal/proto/commonpb"
 	"github.com/milvus-io/milvus/internal/proto/datapb"
 	"github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/internal/types"
+	"github.com/milvus-io/milvus/internal/util/concurrency"
 	"github.com/milvus-io/milvus/internal/util/flowgraph"
 )
 
@@ -51,6 +53,9 @@ type dataSyncService struct {
 	flushManager     flushManager // flush manager handles flush process
 	chunkManager     storage.ChunkManager
 	compactor        *compactionExecutor // reference to compaction executor
+
+	// concurrent add segments, reduce time to load delta log from oss
+	ioPool *concurrency.Pool
 }
 
 func newDataSyncService(ctx context.Context,
@@ -71,6 +76,14 @@ func newDataSyncService(ctx context.Context,
 		return nil, errors.New("Nil input")
 	}
 
+	// Initialize io cocurrency pool
+	log.Info("initialize io concurrency pool", zap.String("vchannel", vchan.GetChannelName()), zap.Int("ioConcurrency", Params.DataNodeCfg.IOConcurrency))
+	ioPool, err := concurrency.NewPool(Params.DataNodeCfg.IOConcurrency)
+	if err != nil {
+		log.Error("failed to create goroutine pool for dataSyncService", zap.Error(err))
+		return nil, err
+	}
+
 	ctx1, cancel := context.WithCancel(ctx)
 
 	service := &dataSyncService{
@@ -89,6 +102,7 @@ func newDataSyncService(ctx context.Context,
 		flushingSegCache: flushingSegCache,
 		chunkManager:     chunkManager,
 		compactor:        compactor,
+		ioPool:           ioPool,
 	}
 
 	if err := service.initNodes(vchan); err != nil {
@@ -117,14 +131,14 @@ func newParallelConfig() parallelConfig {
 	return parallelConfig{Params.DataNodeCfg.FlowGraphMaxQueueLength, Params.DataNodeCfg.FlowGraphMaxParallelism}
 }
 
-// start starts the flowgraph in datasyncservice
+// start starts the flow graph in datasyncservice
 func (dsService *dataSyncService) start() {
 	if dsService.fg != nil {
-		log.Info("dataSyncService starting flowgraph", zap.Int64("collectionID", dsService.collectionID),
+		log.Info("dataSyncService starting flow graph", zap.Int64("collectionID", dsService.collectionID),
 			zap.String("vChanName", dsService.vchannelName))
 		dsService.fg.Start()
 	} else {
-		log.Warn("dataSyncService starting flowgraph is nil", zap.Int64("collectionID", dsService.collectionID),
+		log.Warn("dataSyncService starting flow graph is nil", zap.Int64("collectionID", dsService.collectionID),
 			zap.String("vChanName", dsService.vchannelName))
 	}
 }
@@ -138,8 +152,15 @@ func (dsService *dataSyncService) close() {
 		metrics.DataNodeNumProducers.WithLabelValues(fmt.Sprint(Params.DataNodeCfg.GetNodeID())).Sub(2) // timeTickChannel + deltaChannel
 	}
 
+	dsService.clearGlobalFlushingCache()
+
 	dsService.cancelFn()
 	dsService.flushManager.close()
+}
+
+func (dsService *dataSyncService) clearGlobalFlushingCache() {
+	segments := dsService.replica.listAllSegmentIDs()
+	dsService.flushingSegCache.Remove(segments...)
 }
 
 // initNodes inits a TimetickedFlowGraph
@@ -149,8 +170,20 @@ func (dsService *dataSyncService) initNodes(vchanInfo *datapb.VchannelInfo) erro
 	dsService.flushManager = NewRendezvousFlushManager(dsService.idAllocator, dsService.chunkManager, dsService.replica,
 		flushNotifyFunc(dsService), dropVirtualChannelFunc(dsService))
 
+	var err error
 	// recover segment checkpoints
-	for _, us := range vchanInfo.GetUnflushedSegments() {
+	unflushedSegmentInfos, err := dsService.getSegmentInfos(vchanInfo.GetUnflushedSegmentIds())
+	if err != nil {
+		return err
+	}
+	flushedSegmentInfos, err := dsService.getSegmentInfos(vchanInfo.GetFlushedSegmentIds())
+	if err != nil {
+		return err
+	}
+
+	futures := make([]*concurrency.Future, 0, len(unflushedSegmentInfos)+len(flushedSegmentInfos))
+
+	for _, us := range unflushedSegmentInfos {
 		if us.CollectionID != dsService.collectionID ||
 			us.GetInsertChannel() != vchanInfo.ChannelName {
 			log.Warn("Collection ID or ChannelName not compact",
@@ -162,10 +195,10 @@ func (dsService *dataSyncService) initNodes(vchanInfo *datapb.VchannelInfo) erro
 			continue
 		}
 
-		log.Info("Recover Segment NumOfRows form checkpoints",
-			zap.String("InsertChannel", us.GetInsertChannel()),
-			zap.Int64("SegmentID", us.GetID()),
-			zap.Int64("NumOfRows", us.GetNumOfRows()),
+		log.Info("recover growing segments form checkpoints",
+			zap.String("vChannelName", us.GetInsertChannel()),
+			zap.Int64("segmentID", us.GetID()),
+			zap.Int64("numRows", us.GetNumOfRows()),
 		)
 		var cp *segmentCheckPoint
 		if us.GetDmlPosition() != nil {
@@ -174,13 +207,19 @@ func (dsService *dataSyncService) initNodes(vchanInfo *datapb.VchannelInfo) erro
 				pos:     *us.GetDmlPosition(),
 			}
 		}
-		if err := dsService.replica.addNormalSegment(us.GetID(), us.CollectionID, us.PartitionID, us.GetInsertChannel(),
-			us.GetNumOfRows(), us.Statslogs, cp, vchanInfo.GetSeekPosition().GetTimestamp()); err != nil {
-			return err
-		}
+		// avoid closure capture iteration variable
+		segment := us
+		future := dsService.ioPool.Submit(func() (interface{}, error) {
+			if err := dsService.replica.addNormalSegment(segment.GetID(), segment.GetCollectionID(), segment.GetPartitionID(), segment.GetInsertChannel(),
+				segment.GetNumOfRows(), segment.GetStatslogs(), cp, vchanInfo.GetSeekPosition().GetTimestamp()); err != nil {
+				return nil, err
+			}
+			return nil, nil
+		})
+		futures = append(futures, future)
 	}
 
-	for _, fs := range vchanInfo.GetFlushedSegments() {
+	for _, fs := range flushedSegmentInfos {
 		if fs.CollectionID != dsService.collectionID ||
 			fs.GetInsertChannel() != vchanInfo.ChannelName {
 			log.Warn("Collection ID or ChannelName not compact",
@@ -191,16 +230,26 @@ func (dsService *dataSyncService) initNodes(vchanInfo *datapb.VchannelInfo) erro
 			)
 			continue
 		}
-
-		log.Info("Recover Segment NumOfRows form checkpoints",
-			zap.String("InsertChannel", fs.GetInsertChannel()),
-			zap.Int64("SegmentID", fs.GetID()),
-			zap.Int64("NumOfRows", fs.GetNumOfRows()),
+		log.Info("recover sealed segments form checkpoints",
+			zap.String("vChannelName", fs.GetInsertChannel()),
+			zap.Int64("segmentID", fs.GetID()),
+			zap.Int64("numRows", fs.GetNumOfRows()),
 		)
-		if err := dsService.replica.addFlushedSegment(fs.GetID(), fs.CollectionID, fs.PartitionID, fs.GetInsertChannel(),
-			fs.GetNumOfRows(), fs.Statslogs, vchanInfo.GetSeekPosition().GetTimestamp()); err != nil {
-			return err
-		}
+		// avoid closure capture iteration variable
+		segment := fs
+		future := dsService.ioPool.Submit(func() (interface{}, error) {
+			if err := dsService.replica.addFlushedSegment(segment.GetID(), segment.GetCollectionID(), segment.GetPartitionID(), segment.GetInsertChannel(),
+				segment.GetNumOfRows(), segment.GetStatslogs(), vchanInfo.GetSeekPosition().GetTimestamp()); err != nil {
+				return nil, err
+			}
+			return nil, nil
+		})
+		futures = append(futures, future)
+	}
+
+	err = concurrency.AwaitAll(futures...)
+	if err != nil {
+		return err
 	}
 
 	c := &nodeConfig{
@@ -213,14 +262,26 @@ func (dsService *dataSyncService) initNodes(vchanInfo *datapb.VchannelInfo) erro
 		parallelConfig: newParallelConfig(),
 	}
 
-	var err error
 	var dmStreamNode Node
 	dmStreamNode, err = newDmInputNode(dsService.ctx, vchanInfo.GetSeekPosition(), c)
 	if err != nil {
 		return err
 	}
 
-	var ddNode Node = newDDNode(dsService.ctx, dsService.collectionID, vchanInfo, dsService.msFactory, dsService.compactor)
+	var ddNode Node
+	ddNode, err = newDDNode(
+		dsService.ctx,
+		dsService.collectionID,
+		vchanInfo.GetChannelName(),
+		vchanInfo.GetDroppedSegmentIds(),
+		flushedSegmentInfos,
+		unflushedSegmentInfos,
+		dsService.msFactory,
+		dsService.compactor)
+	if err != nil {
+		return err
+	}
+
 	var insertBufferNode Node
 	insertBufferNode, err = newInsertBufferNode(
 		dsService.ctx,
@@ -286,4 +347,28 @@ func (dsService *dataSyncService) initNodes(vchanInfo *datapb.VchannelInfo) erro
 		return err
 	}
 	return nil
+}
+
+// getSegmentInfos return the SegmentInfo details according to the given ids through RPC to datacoord
+func (dsService *dataSyncService) getSegmentInfos(segmentIDs []int64) ([]*datapb.SegmentInfo, error) {
+	infoResp, err := dsService.dataCoord.GetSegmentInfo(dsService.ctx, &datapb.GetSegmentInfoRequest{
+		Base: &commonpb.MsgBase{
+			MsgType:   commonpb.MsgType_SegmentInfo,
+			MsgID:     0,
+			Timestamp: 0,
+			SourceID:  Params.ProxyCfg.GetNodeID(),
+		},
+		SegmentIDs:       segmentIDs,
+		IncludeUnHealthy: true,
+	})
+	if err != nil {
+		log.Error("Fail to get datapb.SegmentInfo by ids from datacoord", zap.Error(err))
+		return nil, err
+	}
+	if infoResp.GetStatus().ErrorCode != commonpb.ErrorCode_Success {
+		err = errors.New(infoResp.GetStatus().Reason)
+		log.Error("Fail to get datapb.SegmentInfo by ids from datacoord", zap.Error(err))
+		return nil, err
+	}
+	return infoResp.Infos, nil
 }

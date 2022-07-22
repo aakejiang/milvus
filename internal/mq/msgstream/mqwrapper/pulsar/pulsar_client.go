@@ -18,12 +18,12 @@ package pulsar
 
 import (
 	"errors"
+	"strings"
 	"sync"
-
-	"github.com/milvus-io/milvus/internal/mq/msgstream/mqwrapper"
 
 	"github.com/apache/pulsar-client-go/pulsar"
 	"github.com/milvus-io/milvus/internal/log"
+	"github.com/milvus-io/milvus/internal/mq/msgstream/mqwrapper"
 	"github.com/milvus-io/milvus/internal/util/retry"
 	"go.uber.org/zap"
 )
@@ -34,24 +34,6 @@ type pulsarClient struct {
 
 var sc *pulsarClient
 var once sync.Once
-
-func isPulsarError(err error, result ...pulsar.Result) bool {
-	if len(result) == 0 {
-		return false
-	}
-
-	perr, ok := err.(*pulsar.Error)
-	if !ok {
-		return false
-	}
-	for _, r := range result {
-		if perr.Result() == r {
-			return true
-		}
-	}
-
-	return false
-}
 
 // NewClient creates a pulsarClient object
 // according to the parameter opts of type pulsar.ClientOptions
@@ -73,6 +55,7 @@ func (pc *pulsarClient) CreateProducer(options mqwrapper.ProducerOptions) (mqwra
 	opts := pulsar.ProducerOptions{Topic: options.Topic}
 	if options.EnableCompression {
 		opts.CompressionType = pulsar.ZSTD
+		opts.CompressionLevel = pulsar.Faster
 	}
 
 	pp, err := pc.client.CreateProducer(opts)
@@ -97,8 +80,7 @@ func (pc *pulsarClient) Subscribe(options mqwrapper.ConsumerOptions) (mqwrapper.
 		MessageChannel:              receiveChannel,
 	})
 	if err != nil {
-		// exclusive consumer already exist
-		if isPulsarError(err, pulsar.ConsumerBusy) {
+		if strings.Contains(err.Error(), "ConsumerBusy") {
 			return nil, retry.Unrecoverable(err)
 		}
 		return nil, err

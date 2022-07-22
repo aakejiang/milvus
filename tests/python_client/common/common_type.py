@@ -48,7 +48,7 @@ binary_vec_field_desc = "binary vector type field"
 max_dim = 32768
 gracefulTime = 1
 default_nlist = 128
-compact_segment_num_threshold = 10
+compact_segment_num_threshold = 4
 compact_delta_ratio_reciprocal = 5  # compact_delta_binlog_ratio is 0.2
 compact_retention_duration = 40  # compaction travel time retention range 20s
 max_compaction_interval = 60  # the max time interval (s) from the last compaction
@@ -140,14 +140,17 @@ get_invalid_dict = [
 
 get_dict_without_host_port = [
     {"host": "host"},
+    {"": ""}
+]
+
+get_dict_invalid_host_port = [
     {"port": "port"},
     # ["host", "port"],
     # ("host", "port"),
     {"host": -1},
     {"port": ["192.168.1.1"]},
-    {"": ""}
+    {"port": "-1", "host": "hostlocal"},
 ]
-
 
 get_wrong_format_dict = [
     {"host": "string_host", "port": {}},
@@ -183,6 +186,7 @@ class CheckTasks:
     check_search_results = "check_search_results"
     check_query_results = "check_query_results"
     check_query_empty = "check_query_empty"  # verify that query result is empty
+    check_query_not_empty = "check_query_not_empty"
     check_distance = "check_distance"
     check_delete_compact = "check_delete_compact"
     check_merge_compact = "check_merge_compact"

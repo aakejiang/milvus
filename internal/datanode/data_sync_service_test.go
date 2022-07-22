@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus/internal/common"
@@ -64,12 +65,20 @@ func getVchanInfo(info *testInfo) *datapb.VchannelInfo {
 		ufs = []*datapb.SegmentInfo{}
 	}
 
+	var ufsIds []int64
+	var fsIds []int64
+	for _, segmentInfo := range ufs {
+		ufsIds = append(ufsIds, segmentInfo.ID)
+	}
+	for _, segmentInfo := range fs {
+		fsIds = append(fsIds, segmentInfo.ID)
+	}
 	vi := &datapb.VchannelInfo{
-		CollectionID:      info.collID,
-		ChannelName:       info.chanName,
-		SeekPosition:      &internalpb.MsgPosition{},
-		UnflushedSegments: ufs,
-		FlushedSegments:   fs,
+		CollectionID:        info.collID,
+		ChannelName:         info.chanName,
+		SeekPosition:        &internalpb.MsgPosition{},
+		UnflushedSegmentIds: ufsIds,
+		FlushedSegmentIds:   fsIds,
 	}
 	return vi
 }
@@ -221,12 +230,19 @@ func TestDataSyncService_Start(t *testing.T) {
 		NumOfRows:     0,
 		DmlPosition:   &internalpb.MsgPosition{},
 	}}
-
+	var ufsIds []int64
+	var fsIds []int64
+	for _, segmentInfo := range ufs {
+		ufsIds = append(ufsIds, segmentInfo.ID)
+	}
+	for _, segmentInfo := range fs {
+		fsIds = append(fsIds, segmentInfo.ID)
+	}
 	vchan := &datapb.VchannelInfo{
-		CollectionID:      collMeta.ID,
-		ChannelName:       insertChannelName,
-		UnflushedSegments: ufs,
-		FlushedSegments:   fs,
+		CollectionID:        collMeta.ID,
+		ChannelName:         insertChannelName,
+		UnflushedSegmentIds: ufsIds,
+		FlushedSegmentIds:   fsIds,
 	}
 
 	signalCh := make(chan string, 100)
@@ -366,4 +382,60 @@ func TestBytesReader(t *testing.T) {
 	err = binary.Read(rawDataReader, common.Endian, &dataInt8)
 	assert.Nil(t, err)
 	assert.Equal(t, int8(100), dataInt8)
+}
+
+func TestGetSegmentInfos(t *testing.T) {
+	dataCoord := &DataCoordFactory{}
+	dsService := &dataSyncService{
+		dataCoord: dataCoord,
+	}
+	segmentInfos, err := dsService.getSegmentInfos([]int64{1})
+	assert.Nil(t, err)
+	assert.Equal(t, 1, len(segmentInfos))
+
+	dataCoord.GetSegmentInfosError = true
+	segmentInfos2, err := dsService.getSegmentInfos([]int64{1})
+	assert.Error(t, err)
+	assert.Empty(t, segmentInfos2)
+
+	dataCoord.GetSegmentInfosError = false
+	dataCoord.GetSegmentInfosNotSuccess = true
+	segmentInfos3, err := dsService.getSegmentInfos([]int64{1})
+	assert.Error(t, err)
+	assert.Empty(t, segmentInfos3)
+}
+
+func TestClearGlobalFlushingCache(t *testing.T) {
+	dataCoord := &DataCoordFactory{}
+	cm := storage.NewLocalChunkManager(storage.RootPath(dataSyncServiceTestDir))
+	defer cm.RemoveWithPrefix("")
+	replica, err := newReplica(context.Background(), &RootCoordFactory{pkType: schemapb.DataType_Int64}, cm, 1)
+	require.NoError(t, err)
+
+	cache := newCache()
+	dsService := &dataSyncService{
+		dataCoord:        dataCoord,
+		replica:          replica,
+		flushingSegCache: cache,
+	}
+
+	err = replica.addNewSegment(1, 1, 1, "", &internalpb.MsgPosition{}, &internalpb.MsgPosition{})
+	assert.NoError(t, err)
+
+	err = replica.addFlushedSegment(2, 1, 1, "", 0, nil, 0)
+	assert.NoError(t, err)
+
+	err = replica.addNormalSegment(3, 1, 1, "", 0, nil, nil, 0)
+	assert.NoError(t, err)
+
+	cache.checkOrCache(1)
+	cache.checkOrCache(2)
+	cache.checkOrCache(4)
+
+	dsService.clearGlobalFlushingCache()
+
+	assert.False(t, cache.checkIfCached(1))
+	assert.False(t, cache.checkIfCached(2))
+	assert.False(t, cache.checkIfCached(3))
+	assert.True(t, cache.checkIfCached(4))
 }

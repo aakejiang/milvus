@@ -17,15 +17,10 @@
 package querynode
 
 /*
-
-#cgo CFLAGS: -I${SRCDIR}/../core/output/include
-
-#cgo darwin LDFLAGS: -L${SRCDIR}/../core/output/lib -lmilvus_segcore -Wl,-rpath,"${SRCDIR}/../core/output/lib"
-#cgo linux LDFLAGS: -L${SRCDIR}/../core/output/lib -lmilvus_segcore -Wl,-rpath=${SRCDIR}/../core/output/lib
+#cgo pkg-config: milvus_segcore
 
 #include "segcore/collection_c.h"
 #include "segcore/segment_c.h"
-
 */
 import "C"
 import (
@@ -85,7 +80,8 @@ type ReplicaInterface interface {
 	// getSegmentIDs returns segment ids
 	getSegmentIDs(partitionID UniqueID, segType segmentType) ([]UniqueID, error)
 	// getSegmentIDsByVChannel returns segment ids which virtual channel is vChannel
-	getSegmentIDsByVChannel(partitionID UniqueID, vChannel Channel) ([]UniqueID, error)
+	// if partitionIDs is empty, it means that filtering by partitionIDs is not required.
+	getSegmentIDsByVChannel(partitionIDs []UniqueID, vChannel Channel, segType segmentType) ([]UniqueID, error)
 
 	// segment
 	// addSegment add a new segment to collectionReplica
@@ -478,25 +474,40 @@ func (replica *metaReplica) getSegmentIDs(partitionID UniqueID, segType segmentT
 }
 
 // getSegmentIDsByVChannel returns segment ids which virtual channel is vChannel
-func (replica *metaReplica) getSegmentIDsByVChannel(partitionID UniqueID, vChannel Channel) ([]UniqueID, error) {
+// if partitionIDs is empty, it means that filtering by partitionIDs is not required.
+func (replica *metaReplica) getSegmentIDsByVChannel(partitionIDs []UniqueID, vChannel Channel, segType segmentType) ([]UniqueID, error) {
 	replica.mu.RLock()
 	defer replica.mu.RUnlock()
-	segmentIDs, err := replica.getSegmentIDsPrivate(partitionID, segmentTypeGrowing)
-	if err != nil {
-		return nil, err
-	}
-	segmentIDsTmp := make([]UniqueID, 0)
-	for _, segmentID := range segmentIDs {
-		segment, err := replica.getSegmentByIDPrivate(segmentID, segmentTypeGrowing)
-		if err != nil {
-			return nil, err
-		}
-		if segment.vChannelID == vChannel {
-			segmentIDsTmp = append(segmentIDsTmp, segment.ID())
-		}
+
+	var segments map[UniqueID]*Segment
+	var ret []UniqueID
+
+	filterPartition := len(partitionIDs) != 0
+	switch segType {
+	case segmentTypeGrowing:
+		segments = replica.growingSegments
+	case segmentTypeSealed:
+		segments = replica.sealedSegments
+	default:
+		return nil, fmt.Errorf("unexpected segment type, segmentType = %s", segType.String())
 	}
 
-	return segmentIDsTmp, nil
+	partitionMap := make(map[UniqueID]struct{}, len(partitionIDs))
+	for _, partID := range partitionIDs {
+		partitionMap[partID] = struct{}{}
+	}
+	for _, segment := range segments {
+		if segment.vChannelID == vChannel {
+			if filterPartition {
+				partitionID := segment.partitionID
+				if _, ok := partitionMap[partitionID]; !ok {
+					continue
+				}
+			}
+			ret = append(ret, segment.ID())
+		}
+	}
+	return ret, nil
 }
 
 // getSegmentIDsPrivate is private function in collectionReplica, it returns segment ids
@@ -539,7 +550,8 @@ func (replica *metaReplica) addSegmentPrivate(segmentID UniqueID, partitionID Un
 		return err
 	}
 	if ok {
-		return nil
+		return fmt.Errorf("segment has been existed, "+
+			"segmentID = %d, collectionID = %d, segmentType = %s", segmentID, segment.collectionID, segType.String())
 	}
 	partition.addSegmentID(segmentID, segType)
 
@@ -608,7 +620,7 @@ func (replica *metaReplica) removeSegmentPrivate(segmentID UniqueID, segType seg
 			deleteSegment(segment)
 		}
 	default:
-		panic("unsupported segment type")
+		panic(fmt.Sprintf("unsupported segment type %s", segType.String()))
 	}
 
 	metrics.QueryNodeNumSegments.WithLabelValues(fmt.Sprint(Params.QueryNodeCfg.GetNodeID())).Dec()

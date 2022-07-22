@@ -86,7 +86,7 @@ func (loader *segmentLoader) LoadSegment(req *querypb.LoadSegmentsRequest, segme
 	log.Info("segmentLoader start loading...",
 		zap.Any("collectionID", req.CollectionID),
 		zap.Any("segmentNum", segmentNum),
-		zap.Any("loadType", segmentType))
+		zap.Any("segmentType", segmentType.String()))
 
 	// check memory limit
 	concurrencyLevel := loader.cpuPool.Cap()
@@ -120,6 +120,7 @@ func (loader *segmentLoader) LoadSegment(req *querypb.LoadSegmentsRequest, segme
 		segmentID := info.SegmentID
 		partitionID := info.PartitionID
 		collectionID := info.CollectionID
+		vChannelID := info.InsertChannel
 
 		collection, err := loader.metaReplica.getCollectionByID(collectionID)
 		if err != nil {
@@ -127,13 +128,13 @@ func (loader *segmentLoader) LoadSegment(req *querypb.LoadSegmentsRequest, segme
 			return err
 		}
 
-		segment, err := newSegment(collection, segmentID, partitionID, collectionID, "", segmentType)
+		segment, err := newSegment(collection, segmentID, partitionID, collectionID, vChannelID, segmentType)
 		if err != nil {
 			log.Error("load segment failed when create new segment",
 				zap.Int64("collectionID", collectionID),
 				zap.Int64("partitionID", partitionID),
 				zap.Int64("segmentID", segmentID),
-				zap.Int32("segment type", int32(segmentType)),
+				zap.String("segmentType", segmentType.String()),
 				zap.Error(err))
 			segmentGC()
 			return err
@@ -156,7 +157,7 @@ func (loader *segmentLoader) LoadSegment(req *querypb.LoadSegmentsRequest, segme
 				zap.Int64("collectionID", collectionID),
 				zap.Int64("partitionID", partitionID),
 				zap.Int64("segmentID", segmentID),
-				zap.Int32("segment type", int32(segmentType)),
+				zap.String("segmentType", segmentType.String()),
 				zap.Error(err))
 			return err
 		}
@@ -205,7 +206,8 @@ func (loader *segmentLoader) loadSegmentInternal(segment *Segment,
 	log.Info("start loading segment data into memory",
 		zap.Int64("collectionID", collectionID),
 		zap.Int64("partitionID", partitionID),
-		zap.Int64("segmentID", segmentID))
+		zap.Int64("segmentID", segmentID),
+		zap.String("segmentType", segment.getType().String()))
 
 	pkFieldID, err := loader.metaReplica.getPKFieldIDByCollectionID(collectionID)
 	if err != nil {
@@ -309,7 +311,8 @@ func (loader *segmentLoader) loadGrowingSegmentFields(segment *Segment, fieldBin
 	log.Info("log field binlogs done",
 		zap.Int64("collection", segment.collectionID),
 		zap.Int64("segment", segment.segmentID),
-		zap.Any("field", fieldBinlogs))
+		zap.Any("field", fieldBinlogs),
+		zap.String("segmentType", segmentType.String()))
 
 	_, _, insertData, err := iCodec.Deserialize(blobs)
 	if err != nil {
@@ -336,7 +339,7 @@ func (loader *segmentLoader) loadGrowingSegmentFields(segment *Segment, fieldBin
 		return loader.loadGrowingSegments(segment, rowIDData.(*storage.Int64FieldData).Data, utss, insertData)
 
 	default:
-		err := fmt.Errorf("illegal segmentType=%v when load segment, collectionID=%v", segmentType, segment.collectionID)
+		err := fmt.Errorf("illegal segmentType=%s when load segment, collectionID=%v", segmentType.String(), segment.collectionID)
 		return err
 	}
 }
@@ -355,10 +358,11 @@ func (loader *segmentLoader) loadSealedSegmentFields(segment *Segment, fields []
 		return err
 	}
 
-	log.Info("log field binlogs done",
+	log.Info("load field binlogs done for sealed segment",
 		zap.Int64("collection", segment.collectionID),
 		zap.Int64("segment", segment.segmentID),
-		zap.Any("fields", fields))
+		zap.Any("len(field)", len(fields)),
+		zap.String("segmentType", segment.getType().String()))
 
 	return nil
 }
@@ -425,7 +429,11 @@ func (loader *segmentLoader) loadIndexedFieldData(segment *Segment, vecFieldInfo
 		if err != nil {
 			return err
 		}
-		log.Debug("load field's index data done", zap.Int64("segmentID", segment.ID()), zap.Int64("fieldID", fieldID))
+
+		log.Info("load field binlogs done for sealed segment with index",
+			zap.Int64("collection", segment.collectionID),
+			zap.Int64("segment", segment.segmentID),
+			zap.Int64("fieldID", fieldID))
 
 		segment.setIndexedFieldInfo(fieldID, fieldInfo)
 	}
@@ -790,14 +798,25 @@ func (loader *segmentLoader) checkSegmentSize(collectionID UniqueID, segmentLoad
 		}
 	}
 
-	toMB := func(mem uint64) float64 {
-		return float64(mem) / 1024 / 1024
+	toMB := func(mem uint64) uint64 {
+		return mem / 1024 / 1024
 	}
 
 	// when load segment, data will be copied from go memory to c++ memory
-	if usedMemAfterLoad+maxSegmentSize*uint64(concurrency) > uint64(float64(totalMem)*Params.QueryNodeCfg.OverloadedMemoryThresholdPercentage) {
-		return fmt.Errorf("load segment failed, OOM if load, collectionID = %d, maxSegmentSize = %.2f MB, concurrency = %d, usedMemAfterLoad = %.2f MB, totalMem = %.2f MB, thresholdFactor = %f",
-			collectionID, toMB(maxSegmentSize), concurrency, toMB(usedMemAfterLoad), toMB(totalMem), Params.QueryNodeCfg.OverloadedMemoryThresholdPercentage)
+	loadingUsage := usedMemAfterLoad + uint64(
+		float64(maxSegmentSize)*float64(concurrency)*Params.QueryNodeCfg.LoadMemoryUsageFactor)
+	log.Debug("predict memory usage while loading (in MiB)",
+		zap.Uint64("usage", toMB(loadingUsage)),
+		zap.Uint64("usageAfterLoad", toMB(usedMemAfterLoad)))
+
+	if loadingUsage > uint64(float64(totalMem)*Params.QueryNodeCfg.OverloadedMemoryThresholdPercentage) {
+		return fmt.Errorf("load segment failed, OOM if load, collectionID = %d, maxSegmentSize = %v MB, concurrency = %d, usedMemAfterLoad = %v MB, totalMem = %v MB, thresholdFactor = %f",
+			collectionID,
+			toMB(maxSegmentSize),
+			concurrency,
+			toMB(usedMemAfterLoad),
+			toMB(totalMem),
+			Params.QueryNodeCfg.OverloadedMemoryThresholdPercentage)
 	}
 
 	return nil

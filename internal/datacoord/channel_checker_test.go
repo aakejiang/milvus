@@ -113,13 +113,33 @@ func TestChannelStateTimer(t *testing.T) {
 					assert.Equal(t, watchTimeoutAck, e.ackType)
 					assert.Equal(t, test.channelName, e.channelName)
 				} else {
-					timer.stopIfExsit(&ackEvent{watchSuccessAck, test.channelName, 1})
+					timer.stopIfExist(&ackEvent{watchSuccessAck, test.channelName, 1})
 				}
 			})
 		}
 
 		timer.startOne(datapb.ChannelWatchState_ToWatch, "channel-remove", 1, normalTimeoutTs)
 		timer.removeTimers([]string{"channel-remove"})
+	})
+
+	t.Run("test startOne no leaking issue 17335", func(t *testing.T) {
+		timeoutTs := time.Now().Add(20 * time.Second).UnixNano()
+		timer := newChannelStateTimer(kv)
+
+		timer.startOne(datapb.ChannelWatchState_ToRelease, "channel-1", 1, timeoutTs)
+		stop, ok := timer.runningTimers.Load("channel-1")
+		require.True(t, ok)
+
+		timer.startOne(datapb.ChannelWatchState_ToWatch, "channel-1", 1, timeoutTs)
+		_, ok = <-stop.(chan struct{})
+		assert.False(t, ok)
+
+		stop2, ok := timer.runningTimers.Load("channel-1")
+		assert.True(t, ok)
+
+		timer.removeTimers([]string{"channel-1"})
+		_, ok = <-stop2.(chan struct{})
+		assert.False(t, ok)
 	})
 }
 
@@ -173,6 +193,33 @@ func TestChannelStateTimer_parses(t *testing.T) {
 				}
 			})
 		}
+	})
+
+	t.Run("test parseWatchInfo compatibility", func(t *testing.T) {
+		oldWatchInfo := datapb.ChannelWatchInfo{
+			Vchan: &datapb.VchannelInfo{
+				CollectionID:        1,
+				ChannelName:         "delta-channel1",
+				UnflushedSegments:   []*datapb.SegmentInfo{{ID: 1}},
+				FlushedSegments:     []*datapb.SegmentInfo{{ID: 2}},
+				DroppedSegments:     []*datapb.SegmentInfo{{ID: 3}},
+				UnflushedSegmentIds: []int64{1},
+			},
+			StartTs:   time.Now().Unix(),
+			State:     datapb.ChannelWatchState_ToWatch,
+			TimeoutTs: time.Now().Add(20 * time.Millisecond).UnixNano(),
+		}
+
+		oldData, err := proto.Marshal(&oldWatchInfo)
+		assert.NoError(t, err)
+		newWatchInfo, err := parseWatchInfo("key", oldData)
+		assert.NoError(t, err)
+		assert.Equal(t, []*datapb.SegmentInfo{}, newWatchInfo.GetVchan().GetUnflushedSegments())
+		assert.Equal(t, []*datapb.SegmentInfo{}, newWatchInfo.GetVchan().GetFlushedSegments())
+		assert.Equal(t, []*datapb.SegmentInfo{}, newWatchInfo.GetVchan().GetDroppedSegments())
+		assert.NotEmpty(t, newWatchInfo.GetVchan().GetUnflushedSegmentIds())
+		assert.NotEmpty(t, newWatchInfo.GetVchan().GetFlushedSegmentIds())
+		assert.NotEmpty(t, newWatchInfo.GetVchan().GetDroppedSegmentIds())
 	})
 
 	t.Run("test getAckType", func(t *testing.T) {

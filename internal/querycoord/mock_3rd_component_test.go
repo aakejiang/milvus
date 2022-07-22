@@ -22,7 +22,9 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/milvus-io/milvus/internal/log"
 	"github.com/milvus-io/milvus/internal/proto/etcdpb"
+	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus/internal/proto/rootcoordpb"
 
@@ -334,6 +336,9 @@ type dataCoordMock struct {
 	returnGrpcError     bool
 	segmentState        commonpb.SegmentState
 	errLevel            int
+
+	globalLock      sync.Mutex
+	segmentRefCount map[UniqueID]int
 }
 
 func newDataCoordMock(ctx context.Context) *dataCoordMock {
@@ -350,6 +355,7 @@ func newDataCoordMock(ctx context.Context) *dataCoordMock {
 		baseSegmentID:       defaultSegmentID,
 		channelNumPerCol:    defaultChannelNum,
 		segmentState:        commonpb.SegmentState_Flushed,
+		segmentRefCount:     make(map[int64]int),
 	}
 }
 
@@ -460,6 +466,18 @@ func (data *dataCoordMock) AcquireSegmentLock(ctx context.Context, req *datapb.A
 			Reason:    "AcquireSegmentLock failed",
 		}, nil
 	}
+
+	data.globalLock.Lock()
+	defer data.globalLock.Unlock()
+
+	log.Debug("acquire segment locks",
+		zap.Int64s("segments", req.SegmentIDs))
+	for _, segment := range req.SegmentIDs {
+		refCount := data.segmentRefCount[segment]
+		refCount++
+		data.segmentRefCount[segment] = refCount
+	}
+
 	return &commonpb.Status{
 		ErrorCode: commonpb.ErrorCode_Success,
 	}, nil
@@ -478,8 +496,50 @@ func (data *dataCoordMock) ReleaseSegmentLock(ctx context.Context, req *datapb.R
 		}, nil
 	}
 
+	data.globalLock.Lock()
+	defer data.globalLock.Unlock()
+
+	log.Debug("release segment locks",
+		zap.Int64s("segments", req.SegmentIDs))
+	for _, segment := range req.SegmentIDs {
+		refCount := data.segmentRefCount[segment]
+		if refCount > 0 {
+			refCount--
+		}
+
+		data.segmentRefCount[segment] = refCount
+	}
+
 	return &commonpb.Status{
 		ErrorCode: commonpb.ErrorCode_Success,
+	}, nil
+}
+
+func (data *dataCoordMock) GetSegmentInfo(ctx context.Context, req *datapb.GetSegmentInfoRequest) (*datapb.GetSegmentInfoResponse, error) {
+	if data.returnGrpcError {
+		return nil, errors.New("mock get segmentInfo failed")
+	}
+	if data.returnError {
+		return &datapb.GetSegmentInfoResponse{
+			Status: &commonpb.Status{
+				ErrorCode: commonpb.ErrorCode_UnexpectedError,
+				Reason:    "mock get segmentInfo failed",
+			},
+		}, nil
+	}
+
+	var segmentInfos []*datapb.SegmentInfo
+	for _, segmentID := range req.SegmentIDs {
+		segmentInfos = append(segmentInfos, &datapb.SegmentInfo{
+			ID:    segmentID,
+			State: data.segmentState,
+		})
+	}
+	return &datapb.GetSegmentInfoResponse{
+		Status: &commonpb.Status{
+			ErrorCode: commonpb.ErrorCode_Success,
+		},
+		Infos: segmentInfos,
 	}, nil
 }
 

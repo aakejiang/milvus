@@ -90,6 +90,7 @@ func (c *channelStateTimer) startOne(watchState datapb.ChannelWatchState, channe
 		return
 	}
 	stop := make(chan struct{})
+	c.removeTimers([]string{channelName})
 	c.runningTimers.Store(channelName, stop)
 	timeoutT := time.Unix(0, timeoutTs)
 	go func() {
@@ -129,7 +130,7 @@ func (c *channelStateTimer) removeTimers(channels []string) {
 	}
 }
 
-func (c *channelStateTimer) stopIfExsit(e *ackEvent) {
+func (c *channelStateTimer) stopIfExist(e *ackEvent) {
 	stop, ok := c.runningTimers.LoadAndDelete(e.channelName)
 	if ok && e.ackType != watchTimeoutAck && e.ackType != releaseTimeoutAck {
 		close(stop.(chan struct{}))
@@ -146,6 +147,7 @@ func parseWatchInfo(key string, data []byte) (*datapb.ChannelWatchInfo, error) {
 	if watchInfo.Vchan == nil {
 		return nil, fmt.Errorf("invalid event: ChannelWatchInfo with nil VChannelInfo, key: %s", key)
 	}
+	reviseVChannelInfo(watchInfo.GetVchan())
 
 	return &watchInfo, nil
 }

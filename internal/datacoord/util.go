@@ -19,8 +19,6 @@ package datacoord
 import (
 	"context"
 	"errors"
-	"strconv"
-	"strings"
 	"time"
 
 	"github.com/milvus-io/milvus/internal/proto/commonpb"
@@ -62,26 +60,34 @@ func VerifyResponse(response interface{}, err error) error {
 	return nil
 }
 
-// FailResponse sets status to failed with reason
-func FailResponse(status *commonpb.Status, reason string) {
+// failResponse sets status to failed with unexpected error and reason.
+func failResponse(status *commonpb.Status, reason string) {
 	status.ErrorCode = commonpb.ErrorCode_UnexpectedError
 	status.Reason = reason
 }
 
-func getTimetravelReverseTime(ctx context.Context, allocator allocator) (*timetravel, error) {
+// failResponseWithCode sets status to failed with error code and reason.
+func failResponseWithCode(status *commonpb.Status, errCode commonpb.ErrorCode, reason string) {
+	status.ErrorCode = errCode
+	status.Reason = reason
+}
+
+func getCompactTime(ctx context.Context, allocator allocator) (*compactTime, error) {
 	ts, err := allocator.allocTimestamp(ctx)
 	if err != nil {
 		return nil, err
 	}
 
 	pts, _ := tsoutil.ParseTS(ts)
-	ttpts := pts.Add(-time.Duration(Params.CommonCfg.RetentionDuration) * time.Second)
-	tt := tsoutil.ComposeTS(ttpts.UnixNano()/int64(time.Millisecond), 0)
-	return &timetravel{tt}, nil
-}
+	ttRetention := pts.Add(-time.Duration(Params.CommonCfg.RetentionDuration) * time.Second)
+	ttRetentionLogic := tsoutil.ComposeTS(ttRetention.UnixNano()/int64(time.Millisecond), 0)
 
-func parseSegmentIDByBinlog(path string) (UniqueID, error) {
-	// binlog path should consist of "files/insertLog/collID/partID/segID/fieldID/fileName"
-	keyStr := strings.Split(path, "/")
-	return strconv.ParseInt(keyStr[len(keyStr)-3], 10, 64)
+	// TODO, change to collection level
+	if Params.CommonCfg.EntityExpirationTTL > 0 {
+		ttexpired := pts.Add(-Params.CommonCfg.EntityExpirationTTL)
+		ttexpiredLogic := tsoutil.ComposeTS(ttexpired.UnixNano()/int64(time.Millisecond), 0)
+		return &compactTime{ttRetentionLogic, ttexpiredLogic}, nil
+	}
+	// no expiration time
+	return &compactTime{ttRetentionLogic, 0}, nil
 }

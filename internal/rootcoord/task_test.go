@@ -5,11 +5,16 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/golang/protobuf/proto"
+	"github.com/stretchr/testify/assert"
+
+	"github.com/milvus-io/milvus/internal/util/typeutil"
+
 	"github.com/milvus-io/milvus/internal/metastore/model"
 	"github.com/milvus-io/milvus/internal/proto/commonpb"
+	"github.com/milvus-io/milvus/internal/proto/milvuspb"
 	"github.com/milvus-io/milvus/internal/proto/rootcoordpb"
-	"github.com/milvus-io/milvus/internal/util/typeutil"
-	"github.com/stretchr/testify/assert"
+	"github.com/milvus-io/milvus/internal/proto/schemapb"
 )
 
 func TestDescribeSegmentReqTask_Type(t *testing.T) {
@@ -64,27 +69,26 @@ func TestDescribeSegmentsReqTask_Execute(t *testing.T) {
 		return []typeutil.UniqueID{segID}, nil
 	}
 	c.MetaTable = &MetaTable{
-		segID2IndexMeta: map[typeutil.UniqueID]map[typeutil.UniqueID]model.Index{},
+		segID2IndexID: make(map[typeutil.UniqueID]typeutil.UniqueID, 1),
 	}
 	assert.NoError(t, tsk.Execute(context.Background()))
 
-	// index not found in meta.
+	// index not found in meta
 	c.MetaTable = &MetaTable{
-		segID2IndexMeta: map[typeutil.UniqueID]map[typeutil.UniqueID]model.Index{
-			segID: {
-				indexID: {
-					CollectionID: collID,
-					FieldID:      fieldID,
-					IndexID:      indexID,
-					SegmentIndexes: map[int64]model.SegmentIndex{
-						segID: {
-							Segment: model.Segment{
-								SegmentID:   segID,
-								PartitionID: partID,
-							},
-							BuildID:     buildID,
-							EnableIndex: true,
+		segID2IndexID: map[typeutil.UniqueID]typeutil.UniqueID{segID: indexID},
+		indexID2Meta: map[typeutil.UniqueID]*model.Index{
+			indexID: {
+				CollectionID: collID,
+				FieldID:      fieldID,
+				IndexID:      indexID,
+				SegmentIndexes: map[int64]model.SegmentIndex{
+					segID + 1: {
+						Segment: model.Segment{
+							SegmentID:   segID,
+							PartitionID: partID,
 						},
+						BuildID:     buildID,
+						EnableIndex: true,
 					},
 				},
 			},
@@ -94,32 +98,58 @@ func TestDescribeSegmentsReqTask_Execute(t *testing.T) {
 
 	// success.
 	c.MetaTable = &MetaTable{
-		segID2IndexMeta: map[typeutil.UniqueID]map[typeutil.UniqueID]model.Index{
-			segID: {
-				indexID: {
-					CollectionID: collID,
-					FieldID:      fieldID,
-					IndexID:      indexID,
-					SegmentIndexes: map[int64]model.SegmentIndex{
-						segID: {
-							Segment: model.Segment{
-								SegmentID:   segID,
-								PartitionID: partID,
-							},
-							BuildID:     buildID,
-							EnableIndex: true,
+		segID2IndexID: map[typeutil.UniqueID]typeutil.UniqueID{segID: indexID},
+		indexID2Meta: map[typeutil.UniqueID]*model.Index{
+			indexID: {
+				CollectionID: collID,
+				FieldID:      fieldID,
+				IndexID:      indexID,
+				IndexName:    indexName,
+				IndexParams:  nil,
+				SegmentIndexes: map[int64]model.SegmentIndex{
+					segID: {
+						Segment: model.Segment{
+							SegmentID:   segID,
+							PartitionID: partID,
 						},
+						BuildID:     buildID,
+						EnableIndex: true,
 					},
 				},
 			},
 		},
-		indexID2Meta: map[typeutil.UniqueID]model.Index{
-			indexID: {
-				IndexName:   indexName,
-				IndexID:     indexID,
-				IndexParams: nil,
-			},
-		},
 	}
 	assert.NoError(t, tsk.Execute(context.Background()))
+}
+
+func Test_hasSystemFields(t *testing.T) {
+	t.Run("no system fields", func(t *testing.T) {
+		schema := &schemapb.CollectionSchema{Fields: []*schemapb.FieldSchema{{Name: "not_system_field"}}}
+		assert.False(t, hasSystemFields(schema, []string{RowIDFieldName, TimeStampFieldName}))
+	})
+
+	t.Run("has row id field", func(t *testing.T) {
+		schema := &schemapb.CollectionSchema{Fields: []*schemapb.FieldSchema{{Name: RowIDFieldName}}}
+		assert.True(t, hasSystemFields(schema, []string{RowIDFieldName, TimeStampFieldName}))
+	})
+
+	t.Run("has timestamp field", func(t *testing.T) {
+		schema := &schemapb.CollectionSchema{Fields: []*schemapb.FieldSchema{{Name: TimeStampFieldName}}}
+		assert.True(t, hasSystemFields(schema, []string{RowIDFieldName, TimeStampFieldName}))
+	})
+}
+
+func TestCreateCollectionReqTask_Execute_hasSystemFields(t *testing.T) {
+	schema := &schemapb.CollectionSchema{Name: "test", Fields: []*schemapb.FieldSchema{{Name: TimeStampFieldName}}}
+	marshaledSchema, err := proto.Marshal(schema)
+	assert.NoError(t, err)
+	task := &CreateCollectionReqTask{
+		Req: &milvuspb.CreateCollectionRequest{
+			Base:           &commonpb.MsgBase{MsgType: commonpb.MsgType_CreateCollection},
+			CollectionName: "test",
+			Schema:         marshaledSchema,
+		},
+	}
+	err = task.Execute(context.Background())
+	assert.Error(t, err)
 }

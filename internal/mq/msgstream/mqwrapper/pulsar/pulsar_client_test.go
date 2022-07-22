@@ -20,24 +20,24 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"math/rand"
+	"net/url"
 	"os"
 	"testing"
 	"time"
 	"unsafe"
 
-	"github.com/milvus-io/milvus/internal/mq/msgstream/mqwrapper"
-	"github.com/milvus-io/milvus/internal/util/paramtable"
-
-	"go.uber.org/zap"
-
 	"github.com/apache/pulsar-client-go/pulsar"
 	"github.com/milvus-io/milvus/internal/common"
 	"github.com/milvus-io/milvus/internal/log"
+	"github.com/milvus-io/milvus/internal/mq/msgstream/mqwrapper"
+	"github.com/milvus-io/milvus/internal/util/paramtable"
 	"github.com/milvus-io/milvus/internal/util/retry"
+	"github.com/streamnative/pulsarctl/pkg/cmdutils"
+	"github.com/streamnative/pulsarctl/pkg/pulsar/utils"
 	"github.com/stretchr/testify/assert"
+	"go.uber.org/zap"
 )
 
 var Params paramtable.BaseTable
@@ -584,42 +584,16 @@ func hackPulsarError(result pulsar.Result) *pulsar.Error {
 	// use unsafe to generate test case
 	/* #nosec G103 */
 	mpe := (*mPulsarError)(unsafe.Pointer(pe))
+	// this what we tested
+	if result == pulsar.ConsumerBusy {
+		mpe.msg = "server error: ConsumerBusy: Exclusive consumer is already connected"
+	}
+
+	if result == pulsar.ConsumerNotFound {
+		mpe.msg = "server error: MetadataError: Consumer not found"
+	}
 	mpe.result = result
 	return pe
-}
-
-func TestIsPulsarError(t *testing.T) {
-	type testCase struct {
-		err      error
-		results  []pulsar.Result
-		expected bool
-	}
-	cases := []testCase{
-		{
-			err:      errors.New(""),
-			results:  []pulsar.Result{},
-			expected: false,
-		},
-		{
-			err:      errors.New(""),
-			results:  []pulsar.Result{pulsar.ConnectError},
-			expected: false,
-		},
-		{
-			err:      hackPulsarError(pulsar.ConsumerBusy),
-			results:  []pulsar.Result{pulsar.ConnectError},
-			expected: false,
-		},
-		{
-			err:      hackPulsarError(pulsar.ConsumerBusy),
-			results:  []pulsar.Result{pulsar.ConnectError, pulsar.ConsumerBusy},
-			expected: true,
-		},
-	}
-
-	for _, tc := range cases {
-		assert.Equal(t, tc.expected, isPulsarError(tc.err, tc.results...))
-	}
 }
 
 type mockPulsarClient struct{}
@@ -670,4 +644,67 @@ func TestPulsarClient_SubscribeExclusiveFail(t *testing.T) {
 		assert.Error(t, err)
 		assert.True(t, retry.IsUnRecoverable(err))
 	})
+}
+
+func TestPulsarCtl(t *testing.T) {
+	topic := "test"
+	subName := "hello"
+
+	pulsarAddress, _ := Params.Load("_PulsarAddress")
+	pc, err := NewClient(pulsar.ClientOptions{URL: pulsarAddress})
+	assert.Nil(t, err)
+	consumer, err := pc.Subscribe(mqwrapper.ConsumerOptions{
+		Topic:                       topic,
+		SubscriptionName:            subName,
+		BufSize:                     1024,
+		SubscriptionInitialPosition: mqwrapper.SubscriptionPositionEarliest,
+	})
+	assert.Nil(t, err)
+	assert.NotNil(t, consumer)
+	defer consumer.Close()
+
+	_, err = pc.Subscribe(mqwrapper.ConsumerOptions{
+		Topic:                       topic,
+		SubscriptionName:            subName,
+		BufSize:                     1024,
+		SubscriptionInitialPosition: mqwrapper.SubscriptionPositionEarliest,
+	})
+
+	assert.Error(t, err)
+
+	_, err = pc.Subscribe(mqwrapper.ConsumerOptions{
+		Topic:                       topic,
+		SubscriptionName:            subName,
+		BufSize:                     1024,
+		SubscriptionInitialPosition: mqwrapper.SubscriptionPositionEarliest,
+	})
+	assert.Error(t, err)
+
+	topicName, err := utils.GetTopicName(topic)
+	assert.NoError(t, err)
+
+	pulsarURL, err := url.ParseRequestURI(pulsarAddress)
+	if err != nil {
+		panic(err)
+	}
+	webport := Params.LoadWithDefault("pulsar.webport", "80")
+	cmdutils.PulsarCtlConfig.WebServiceURL = "http://" + pulsarURL.Hostname() + ":" + webport
+	admin := cmdutils.NewPulsarClient()
+	err = admin.Subscriptions().Delete(*topicName, subName, true)
+	if err != nil {
+		cmdutils.PulsarCtlConfig.WebServiceURL = "http://" + pulsarURL.Hostname() + ":" + "8080"
+		admin := cmdutils.NewPulsarClient()
+		err = admin.Subscriptions().Delete(*topicName, subName, true)
+		assert.NoError(t, err)
+	}
+
+	consumer2, err := pc.Subscribe(mqwrapper.ConsumerOptions{
+		Topic:                       topic,
+		SubscriptionName:            subName,
+		BufSize:                     1024,
+		SubscriptionInitialPosition: mqwrapper.SubscriptionPositionEarliest,
+	})
+	assert.Nil(t, err)
+	assert.NotNil(t, consumer2)
+	defer consumer2.Close()
 }

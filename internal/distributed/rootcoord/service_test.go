@@ -205,6 +205,10 @@ func TestGrpcService(t *testing.T) {
 		return nil
 	}
 
+	core.CallRemoveIndexService = func(ctx context.Context, buildIDs []rootcoord.UniqueID) error {
+		return nil
+	}
+
 	collectionMetaCache := make([]string, 0, 16)
 	pnm := proxyMock{}
 	core.NewProxyClient = func(*sessionutil.Session) (types.Proxy, error) {
@@ -224,6 +228,12 @@ func TestGrpcService(t *testing.T) {
 		return nil
 	}
 	core.CallImportService = func(ctx context.Context, req *datapb.ImportTaskRequest) *datapb.ImportTaskResponse {
+		return nil
+	}
+	core.CallAddSegRefLock = func(context.Context, int64, []int64) error {
+		return nil
+	}
+	core.CallReleaseSegRefLock = func(context.Context, int64, []int64) error {
 		return nil
 	}
 
@@ -601,13 +611,13 @@ func TestGrpcService(t *testing.T) {
 		}
 		collMeta, err := core.MetaTable.GetCollectionByName(collName, 0)
 		assert.Nil(t, err)
-		assert.Zero(t, len(collMeta.FieldIndexes))
+		assert.Zero(t, len(collMeta.FieldIDToIndexID))
 		rsp, err := cli.CreateIndex(ctx, req)
 		assert.Nil(t, err)
 		assert.Equal(t, commonpb.ErrorCode_Success, rsp.ErrorCode)
 		collMeta, err = core.MetaTable.GetCollectionByName(collName, 0)
 		assert.Nil(t, err)
-		assert.Equal(t, 1, len(collMeta.FieldIndexes))
+		assert.Equal(t, 1, len(collMeta.FieldIDToIndexID))
 
 		binlogLock.Lock()
 		defer binlogLock.Unlock()
@@ -624,6 +634,10 @@ func TestGrpcService(t *testing.T) {
 		coll, err := core.MetaTable.GetCollectionByName(collName, 0)
 		assert.Nil(t, err)
 
+		segLock.Lock()
+		segs = []typeutil.UniqueID{segID}
+		segLock.Unlock()
+
 		req := &milvuspb.DescribeSegmentRequest{
 			Base: &commonpb.MsgBase{
 				MsgType:   commonpb.MsgType_DescribeSegment,
@@ -632,7 +646,7 @@ func TestGrpcService(t *testing.T) {
 				SourceID:  190,
 			},
 			CollectionID: coll.CollectionID,
-			SegmentID:    1000,
+			SegmentID:    segID,
 		}
 		rsp, err := cli.DescribeSegment(ctx, req)
 		assert.Nil(t, err)
@@ -729,10 +743,17 @@ func TestGrpcService(t *testing.T) {
 		assert.Nil(t, err)
 		assert.Equal(t, commonpb.ErrorCode_Success, rsp.ErrorCode)
 
-		dropIDLock.Lock()
-		assert.Equal(t, 1, len(dropID))
-		assert.Equal(t, idx[0].IndexID, dropID[0])
-		dropIDLock.Unlock()
+		for {
+			dropIDLock.Lock()
+			if len(dropID) == 1 {
+				assert.Equal(t, idx[0].IndexID, dropID[0])
+				dropIDLock.Unlock()
+				break
+			}
+			dropIDLock.Unlock()
+			time.Sleep(time.Second)
+		}
+
 	})
 
 	t.Run("drop partition", func(t *testing.T) {

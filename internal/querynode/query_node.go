@@ -17,12 +17,7 @@
 package querynode
 
 /*
-
-#cgo CFLAGS: -I${SRCDIR}/../core/output/include
-
-#cgo darwin LDFLAGS: -L${SRCDIR}/../core/output/lib -lmilvus_segcore -Wl,-rpath,"${SRCDIR}/../core/output/lib"
-#cgo linux LDFLAGS: -L${SRCDIR}/../core/output/lib -lmilvus_segcore -Wl,-rpath=${SRCDIR}/../core/output/lib
-#cgo windows LDFLAGS: -L${SRCDIR}/../core/output/lib -lmilvus_segcore -Wl,-rpath=${SRCDIR}/../core/output/lib
+#cgo pkg-config: milvus_segcore
 
 #include "segcore/collection_c.h"
 #include "segcore/segment_c.h"
@@ -33,7 +28,6 @@ import "C"
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path"
@@ -50,6 +44,8 @@ import (
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.uber.org/zap"
 
+	v3rpc "go.etcd.io/etcd/api/v3/v3rpc/rpctypes"
+
 	etcdkv "github.com/milvus-io/milvus/internal/kv/etcd"
 	"github.com/milvus-io/milvus/internal/log"
 	"github.com/milvus-io/milvus/internal/proto/internalpb"
@@ -61,7 +57,6 @@ import (
 	"github.com/milvus-io/milvus/internal/util/paramtable"
 	"github.com/milvus-io/milvus/internal/util/sessionutil"
 	"github.com/milvus-io/milvus/internal/util/typeutil"
-	v3rpc "go.etcd.io/etcd/api/v3/v3rpc/rpctypes"
 )
 
 // make sure QueryNode implements types.QueryNode
@@ -98,10 +93,6 @@ type QueryNode struct {
 
 	// dataSyncService
 	dataSyncService *dataSyncService
-
-	// internal services
-	//queryService *queryService
-	statsService *statsService
 
 	// segment loader
 	loader *segmentLoader
@@ -264,7 +255,6 @@ func (node *QueryNode) Start() error {
 
 	// start services
 	go node.watchChangeInfo()
-	//go node.statsService.start()
 
 	// create shardClusterService for shardLeader functions.
 	node.ShardClusterService = newShardClusterService(node.etcdCli, node.session, node)
@@ -371,39 +361,50 @@ func (node *QueryNode) watchChangeInfo() {
 
 func (node *QueryNode) handleSealedSegmentsChangeInfo(info *querypb.SealedSegmentsChangeInfo) {
 	for _, line := range info.GetInfos() {
-		vchannel, err := validateChangeChannel(line)
-		if err != nil {
-			log.Warn("failed to validate vchannel for SegmentChangeInfo", zap.Error(err))
-			continue
-		}
+		result := splitSegmentsChange(line)
 
-		node.ShardClusterService.HandoffVChannelSegments(vchannel, line)
+		for vchannel, changeInfo := range result {
+			err := node.ShardClusterService.HandoffVChannelSegments(vchannel, changeInfo)
+			if err != nil {
+				log.Warn("failed to handle vchannel segments", zap.String("vchannel", vchannel))
+			}
+		}
 	}
 }
 
-func validateChangeChannel(info *querypb.SegmentChangeInfo) (string, error) {
-	if len(info.GetOnlineSegments()) == 0 && len(info.GetOfflineSegments()) == 0 {
-		return "", errors.New("SegmentChangeInfo with no segments info")
+// splitSegmentsChange returns rearranged segmentChangeInfo in vchannel dimension
+func splitSegmentsChange(changeInfo *querypb.SegmentChangeInfo) map[string]*querypb.SegmentChangeInfo {
+	result := make(map[string]*querypb.SegmentChangeInfo)
+
+	for _, segment := range changeInfo.GetOnlineSegments() {
+		dmlChannel := segment.GetDmChannel()
+		info, has := result[dmlChannel]
+		if !has {
+			info = &querypb.SegmentChangeInfo{
+				OnlineNodeID:  changeInfo.OnlineNodeID,
+				OfflineNodeID: changeInfo.OfflineNodeID,
+			}
+
+			result[dmlChannel] = info
+		}
+
+		info.OnlineSegments = append(info.OnlineSegments, segment)
 	}
 
-	var channelName string
+	for _, segment := range changeInfo.GetOfflineSegments() {
+		dmlChannel := segment.GetDmChannel()
+		info, has := result[dmlChannel]
+		if !has {
+			info = &querypb.SegmentChangeInfo{
+				OnlineNodeID:  changeInfo.OnlineNodeID,
+				OfflineNodeID: changeInfo.OfflineNodeID,
+			}
 
-	for _, segment := range info.GetOnlineSegments() {
-		if channelName == "" {
-			channelName = segment.GetDmChannel()
+			result[dmlChannel] = info
 		}
-		if segment.GetDmChannel() != channelName {
-			return "", fmt.Errorf("found multilple channel name in one SegmentChangeInfo, channel1: %s, channel 2:%s", channelName, segment.GetDmChannel())
-		}
-	}
-	for _, segment := range info.GetOfflineSegments() {
-		if channelName == "" {
-			channelName = segment.GetDmChannel()
-		}
-		if segment.GetDmChannel() != channelName {
-			return "", fmt.Errorf("found multilple channel name in one SegmentChangeInfo, channel1: %s, channel 2:%s", channelName, segment.GetDmChannel())
-		}
+
+		info.OfflineSegments = append(info.OfflineSegments, segment)
 	}
 
-	return channelName, nil
+	return result
 }

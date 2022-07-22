@@ -117,7 +117,8 @@ func (s *Server) AssignSegmentID(ctx context.Context, req *datapb.AssignSegmentI
 			zap.Int64("partitionID", r.GetPartitionID()),
 			zap.String("channelName", r.GetChannelName()),
 			zap.Uint32("count", r.GetCount()),
-			zap.Bool("isImport", r.GetIsImport()))
+			zap.Bool("isImport", r.GetIsImport()),
+			zap.Int64("import task ID", r.GetImportTaskID()))
 
 		// Load the collection info from Root Coordinator, if it is not found in server meta.
 		if s.meta.GetCollection(r.GetCollectionID()) == nil {
@@ -134,8 +135,8 @@ func (s *Server) AssignSegmentID(ctx context.Context, req *datapb.AssignSegmentI
 		segmentAllocations := make([]*Allocation, 0)
 		if r.GetIsImport() {
 			// Have segment manager allocate and return the segment allocation info.
-			segAlloc, err := s.segmentManager.AllocSegmentForImport(ctx,
-				r.CollectionID, r.PartitionID, r.ChannelName, int64(r.Count))
+			segAlloc, err := s.segmentManager.allocSegmentForImport(ctx,
+				r.GetCollectionID(), r.GetPartitionID(), r.GetChannelName(), int64(r.GetCount()), r.GetImportTaskID())
 			if err != nil {
 				log.Warn("failed to alloc segment for import", zap.Any("request", r), zap.Error(err))
 				continue
@@ -263,7 +264,8 @@ func (s *Server) GetCollectionStatistics(ctx context.Context, req *datapb.GetCol
 	return resp, nil
 }
 
-// GetPartitionStatistics returns statistics for parition
+// GetPartitionStatistics returns statistics for partition
+// if partID is empty, return statistics for all partitions of the collection
 // for now only row count is returned
 func (s *Server) GetPartitionStatistics(ctx context.Context, req *datapb.GetPartitionStatisticsRequest) (*datapb.GetPartitionStatisticsResponse, error) {
 	resp := &datapb.GetPartitionStatisticsResponse{
@@ -275,9 +277,17 @@ func (s *Server) GetPartitionStatistics(ctx context.Context, req *datapb.GetPart
 		resp.Status.Reason = serverNotServingErrMsg
 		return resp, nil
 	}
-	nums := s.meta.GetNumRowsOfPartition(req.CollectionID, req.PartitionID)
+	nums := int64(0)
+	if len(req.GetPartitionIDs()) == 0 {
+		nums = s.meta.GetNumRowsOfCollection(req.CollectionID)
+	}
+	for _, partID := range req.GetPartitionIDs() {
+		num := s.meta.GetNumRowsOfPartition(req.CollectionID, partID)
+		nums += num
+	}
 	resp.Status.ErrorCode = commonpb.ErrorCode_Success
 	resp.Stats = append(resp.Stats, &commonpb.KeyValuePair{Key: "row_count", Value: strconv.FormatInt(nums, 10)})
+	logutil.Logger(ctx).Debug("success to get partition statistics", zap.Any("response", resp))
 	return resp, nil
 }
 
@@ -304,12 +314,20 @@ func (s *Server) GetSegmentInfo(ctx context.Context, req *datapb.GetSegmentInfoR
 	}
 	infos := make([]*datapb.SegmentInfo, 0, len(req.SegmentIDs))
 	for _, id := range req.SegmentIDs {
-		info := s.meta.GetSegment(id)
-		if info == nil {
-			resp.Status.Reason = fmt.Sprintf("failed to get segment %d", id)
-			return resp, nil
+		var info *SegmentInfo
+		if req.IncludeUnHealthy {
+			info = s.meta.GetAllSegment(id)
+			if info != nil {
+				infos = append(infos, info.SegmentInfo)
+			}
+		} else {
+			info = s.meta.GetSegment(id)
+			if info == nil {
+				resp.Status.Reason = fmt.Sprintf("failed to get segment %d", id)
+				return resp, nil
+			}
+			infos = append(infos, info.SegmentInfo)
 		}
-		infos = append(infos, info.SegmentInfo)
 	}
 	resp.Status.ErrorCode = commonpb.ErrorCode_Success
 	resp.Infos = infos
@@ -341,8 +359,8 @@ func (s *Server) SaveBinlogPaths(ctx context.Context, req *datapb.SaveBinlogPath
 	segment := s.meta.GetSegment(segmentID)
 
 	if segment == nil {
-		FailResponse(resp, fmt.Sprintf("failed to get segment %d", segmentID))
 		log.Error("failed to get segment", zap.Int64("segmentID", segmentID))
+		failResponseWithCode(resp, commonpb.ErrorCode_SegmentNotFound, fmt.Sprintf("failed to get segment %d", segmentID))
 		return resp, nil
 	}
 
@@ -350,7 +368,7 @@ func (s *Server) SaveBinlogPaths(ctx context.Context, req *datapb.SaveBinlogPath
 	if !req.GetImporting() {
 		channel := segment.GetInsertChannel()
 		if !s.channelManager.Match(nodeID, channel) {
-			FailResponse(resp, fmt.Sprintf("channel %s is not watched on node %d", channel, nodeID))
+			failResponse(resp, fmt.Sprintf("channel %s is not watched on node %d", channel, nodeID))
 			resp.ErrorCode = commonpb.ErrorCode_MetaFailed
 			log.Warn("node is not matched with channel", zap.String("channel", channel), zap.Int64("nodeID", nodeID))
 			return resp, nil
@@ -391,10 +409,10 @@ func (s *Server) SaveBinlogPaths(ctx context.Context, req *datapb.SaveBinlogPath
 			cctx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
 			defer cancel()
 
-			tt, err := getTimetravelReverseTime(cctx, s.allocator)
+			ct, err := getCompactTime(cctx, s.allocator)
 			if err == nil {
 				err = s.compactionTrigger.triggerSingleCompaction(segment.GetCollectionID(),
-					segment.GetPartitionID(), segmentID, segment.GetInsertChannel(), tt)
+					segment.GetPartitionID(), segmentID, segment.GetInsertChannel(), ct)
 				if err != nil {
 					log.Warn("failed to trigger single compaction", zap.Int64("segment ID", segmentID))
 				} else {
@@ -429,7 +447,7 @@ func (s *Server) DropVirtualChannel(ctx context.Context, req *datapb.DropVirtual
 	// validate
 	nodeID := req.GetBase().GetSourceID()
 	if !s.channelManager.Match(nodeID, channel) {
-		FailResponse(resp.Status, fmt.Sprintf("channel %s is not watched on node %d", channel, nodeID))
+		failResponse(resp.Status, fmt.Sprintf("channel %s is not watched on node %d", channel, nodeID))
 		resp.Status.ErrorCode = commonpb.ErrorCode_MetaFailed
 		log.Warn("node is not matched with channel", zap.String("channel", channel), zap.Int64("nodeID", nodeID))
 		return resp, nil
@@ -828,14 +846,14 @@ func (s *Server) ManualCompaction(ctx context.Context, req *milvuspb.ManualCompa
 		return resp, nil
 	}
 
-	tt, err := getTimetravelReverseTime(ctx, s.allocator)
+	ct, err := getCompactTime(ctx, s.allocator)
 	if err != nil {
-		log.Warn("failed to get timetravel reverse time", zap.Int64("collectionID", req.GetCollectionID()), zap.Error(err))
+		log.Warn("failed to get compact time", zap.Int64("collectionID", req.GetCollectionID()), zap.Error(err))
 		resp.Status.Reason = err.Error()
 		return resp, nil
 	}
 
-	id, err := s.compactionTrigger.forceTriggerCompaction(req.CollectionID, tt)
+	id, err := s.compactionTrigger.forceTriggerCompaction(req.CollectionID, ct)
 	if err != nil {
 		log.Error("failed to trigger manual compaction", zap.Int64("collectionID", req.GetCollectionID()), zap.Error(err))
 		resp.Status.Reason = err.Error()
@@ -998,7 +1016,7 @@ func (s *Server) GetFlushState(ctx context.Context, req *milvuspb.GetFlushStateR
 	var unflushed []UniqueID
 	for _, sid := range req.GetSegmentIDs() {
 		segment := s.meta.GetSegment(sid)
-		// segment is nil if it was compacted
+		// segment is nil if it was compacted or it's a empty segment and is set to dropped
 		if segment == nil || segment.GetState() == commonpb.SegmentState_Flushing ||
 			segment.GetState() == commonpb.SegmentState_Flushed {
 			continue
@@ -1112,7 +1130,7 @@ func (s *Server) AcquireSegmentLock(ctx context.Context, req *datapb.AcquireSegm
 		return resp, nil
 	}
 
-	err = s.segReferManager.AddSegmentsLock(req.SegmentIDs, req.NodeID)
+	err = s.segReferManager.AddSegmentsLock(req.TaskID, req.SegmentIDs, req.NodeID)
 	if err != nil {
 		log.Warn("Add reference lock on segments failed", zap.Int64s("segIDs", req.SegmentIDs), zap.Error(err))
 		resp.Reason = err.Error()
@@ -1122,7 +1140,7 @@ func (s *Server) AcquireSegmentLock(ctx context.Context, req *datapb.AcquireSegm
 	if !hasSegments || err != nil {
 		log.Error("AcquireSegmentLock failed, try to release reference lock", zap.Error(err))
 		if err2 := retry.Do(ctx, func() error {
-			return s.segReferManager.ReleaseSegmentsLock(req.SegmentIDs, req.NodeID)
+			return s.segReferManager.ReleaseSegmentsLock(req.TaskID, req.NodeID)
 		}, retry.Attempts(100)); err2 != nil {
 			panic(err)
 		}
@@ -1145,9 +1163,9 @@ func (s *Server) ReleaseSegmentLock(ctx context.Context, req *datapb.ReleaseSegm
 		return resp, nil
 	}
 
-	err := s.segReferManager.ReleaseSegmentsLock(req.SegmentIDs, req.NodeID)
+	err := s.segReferManager.ReleaseSegmentsLock(req.TaskID, req.NodeID)
 	if err != nil {
-		log.Error("DataCoord ReleaseSegmentLock failed", zap.Int64s("segmentIDs", req.SegmentIDs), zap.Int64("nodeID", req.NodeID),
+		log.Error("DataCoord ReleaseSegmentLock failed", zap.Int64("taskID", req.TaskID), zap.Int64("nodeID", req.NodeID),
 			zap.Error(err))
 		resp.Reason = err.Error()
 		return resp, nil

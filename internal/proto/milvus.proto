@@ -265,6 +265,39 @@ message ReleaseCollectionRequest {
 }
 
 /**
+* Get statistics like row_count.
+* WARNING: This API is experimental and not useful for now.
+*/
+message GetStatisticsRequest {
+  option (common.privilege_ext_obj) = {
+    resource_type: Collection
+    resource_privilege: PrivilegeRead
+    resource_name_index: 3
+  };
+  // Not useful for now
+  common.MsgBase base = 1;
+  // Not useful for now
+  string db_name = 2;
+  // The collection name you want get statistics
+  string collection_name = 3;
+  // The partition names you want get statistics, empty for all partitions
+  repeated string partition_names = 4;
+  // Not useful for now, reserved for future
+  uint64 guarantee_timestamp = 5;
+}
+
+/**
+* Will return statistics in stats field like [{key:"row_count",value:"1"}]
+* WARNING: This API is experimental and not useful for now.
+*/
+message GetStatisticsResponse {
+  // Contain error_code and reason
+  common.Status status = 1;
+  // Collection statistics data
+  repeated common.KeyValuePair stats = 2;
+}
+
+/**
 * Get collection statistics like row_count.
 */
 message GetCollectionStatisticsRequest {
@@ -295,7 +328,7 @@ message GetCollectionStatisticsResponse {
 * This is for ShowCollectionsRequest type field.
 */
 enum ShowType {
-  // Will return all colloections
+  // Will return all collections
   All = 0;
   // Will return loaded collections with their inMemory_percentages
   InMemory = 1;
@@ -337,6 +370,8 @@ message ShowCollectionsResponse {
   repeated uint64 created_utc_timestamps = 5;
   // Load percentage on querynode when type is InMemory
   repeated int64 inMemory_percentages = 6;
+  // Indicate whether query service is available
+  repeated bool query_service_available = 7;
 }
 
 /*
@@ -869,8 +904,8 @@ message GetImportStateResponse {
   repeated int64 id_list = 4;                        // auto generated ids if the primary key is autoid
   repeated common.KeyValuePair infos = 5;            // more information about the task, progress percent, file path, failed reason, etc.
   int64 id = 6;                                      // id of an import task
-  bool heuristic_data_queryable = 7;                 // A flag indicating (heuristically) whether import data are queryable (i.e. loaded in query nodes)
-  bool heuristic_data_indexed = 8;                   // A flag indicating (heuristically) whether import data are indexed.
+  bool data_queryable = 7;                           // A flag indicating whether import data are queryable (i.e. loaded in query nodes)
+  bool data_indexed = 8;                             // A flag indicating whether import data are indexed.
 }
 
 message ListImportTasksRequest {

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"path"
+	"runtime/debug"
 	"strconv"
 	"strings"
 
@@ -171,7 +172,7 @@ func (p *ImportWrapper) Import(filePaths []string, rowBased bool, onlyValidate b
 
 			if fileType == JSONFileExt {
 				err := func() error {
-					tr := timerecord.NewTimeRecorder("json parser: " + filePath)
+					tr := timerecord.NewTimeRecorder("json row-based parser: " + filePath)
 
 					// for minio storage, chunkManager will download file into local memory
 					// for local storage, chunkManager open the file directly
@@ -180,7 +181,7 @@ func (p *ImportWrapper) Import(filePaths []string, rowBased bool, onlyValidate b
 						return err
 					}
 					defer file.Close()
-					tr.Record("downloaded")
+					tr.Record("open reader")
 
 					// report file process state
 					p.importResult.State = commonpb.ImportState_ImportDownloaded
@@ -240,7 +241,6 @@ func (p *ImportWrapper) Import(filePaths []string, rowBased bool, onlyValidate b
 			tr := timerecord.NewTimeRecorder("combine field data")
 			defer tr.Elapse("finished")
 
-			fieldNames := make([]storage.FieldID, 0)
 			for k, v := range fields {
 				// ignore 0 row field
 				if v.RowNum() == 0 {
@@ -261,7 +261,6 @@ func (p *ImportWrapper) Import(filePaths []string, rowBased bool, onlyValidate b
 
 				// assign column data to fieldsData
 				fieldsData[k] = v
-				fieldNames = append(fieldNames, k)
 			}
 
 			return nil
@@ -275,7 +274,7 @@ func (p *ImportWrapper) Import(filePaths []string, rowBased bool, onlyValidate b
 
 			if fileType == JSONFileExt {
 				err := func() error {
-					tr := timerecord.NewTimeRecorder("json parser: " + filePath)
+					tr := timerecord.NewTimeRecorder("json column-based parser: " + filePath)
 
 					// for minio storage, chunkManager will download file into local memory
 					// for local storage, chunkManager open the file directly
@@ -284,7 +283,7 @@ func (p *ImportWrapper) Import(filePaths []string, rowBased bool, onlyValidate b
 						return err
 					}
 					defer file.Close()
-					tr.Record("downloaded")
+					tr.Record("open reader")
 
 					// report file process state
 					p.importResult.State = commonpb.ImportState_ImportDownloaded
@@ -318,7 +317,7 @@ func (p *ImportWrapper) Import(filePaths []string, rowBased bool, onlyValidate b
 				}
 			} else if fileType == NumpyFileExt {
 				err := func() error {
-					tr := timerecord.NewTimeRecorder("json parser: " + filePath)
+					tr := timerecord.NewTimeRecorder("numpy parser: " + filePath)
 
 					// for minio storage, chunkManager will download file into local memory
 					// for local storage, chunkManager open the file directly
@@ -327,7 +326,7 @@ func (p *ImportWrapper) Import(filePaths []string, rowBased bool, onlyValidate b
 						return err
 					}
 					defer file.Close()
-					tr.Record("downloaded")
+					tr.Record("open reader")
 
 					// report file process state
 					p.importResult.State = commonpb.ImportState_ImportDownloaded
@@ -377,6 +376,7 @@ func (p *ImportWrapper) Import(filePaths []string, rowBased bool, onlyValidate b
 		}
 	}
 
+	debug.FreeOSMemory()
 	// report file process state
 	p.importResult.State = commonpb.ImportState_ImportPersisted
 	return p.reportFunc(p.importResult)
@@ -512,7 +512,7 @@ func (p *ImportWrapper) splitFieldsData(fieldsData map[storage.FieldID]storage.F
 	rowIDField := fieldsData[common.RowIDField]
 	rowIDFieldArr := rowIDField.(*storage.Int64FieldData)
 	for i := rowIDBegin; i < rowIDEnd; i++ {
-		rowIDFieldArr.Data = append(rowIDFieldArr.Data, rowIDBegin+i)
+		rowIDFieldArr.Data = append(rowIDFieldArr.Data, i)
 	}
 
 	if primaryKey.GetAutoID() {
@@ -520,7 +520,7 @@ func (p *ImportWrapper) splitFieldsData(fieldsData map[storage.FieldID]storage.F
 
 		primaryDataArr := primaryData.(*storage.Int64FieldData)
 		for i := rowIDBegin; i < rowIDEnd; i++ {
-			primaryDataArr.Data = append(primaryDataArr.Data, rowIDBegin+i)
+			primaryDataArr.Data = append(primaryDataArr.Data, i)
 		}
 
 		p.importResult.AutoIds = append(p.importResult.AutoIds, rowIDBegin, rowIDEnd)
