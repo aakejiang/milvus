@@ -21,10 +21,12 @@ import (
 	"sort"
 	"time"
 
+	"github.com/milvus-io/milvus/internal/log"
 	"github.com/milvus-io/milvus/internal/proto/commonpb"
 	"github.com/milvus-io/milvus/internal/proto/schemapb"
 	"github.com/milvus-io/milvus/internal/util/tsoutil"
 	"github.com/milvus-io/milvus/internal/util/typeutil"
+	"go.uber.org/zap"
 )
 
 type calUpperLimitPolicy func(schema *schemapb.CollectionSchema) (int, error)
@@ -140,6 +142,10 @@ type flushPolicy func(segment *SegmentInfo, t Timestamp) bool
 const flushInterval = 2 * time.Second
 
 func flushPolicyV1(segment *SegmentInfo, t Timestamp) bool {
+	log.Debug("flush policy for segment",
+		zap.Int64("segmentID", segment.SegmentInfo.GetID()), zap.Int64("collectionID", segment.GetCollectionID()),
+		zap.Int32("state", int32(segment.GetState())), zap.Int64("lastExpireTime", int64(segment.GetLastExpireTime())),
+		zap.Time("lastFlushTime", segment.lastFlushTime), zap.Int64("currRows", segment.currRows))
 	return segment.GetState() == commonpb.SegmentState_Sealed &&
 		segment.GetLastExpireTime() <= t &&
 		time.Since(segment.lastFlushTime) >= flushInterval &&
