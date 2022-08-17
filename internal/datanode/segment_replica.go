@@ -200,6 +200,7 @@ func (replica *SegmentReplica) segmentFlushed(segID UniqueID) {
 
 func (replica *SegmentReplica) new2NormalSegment(segID UniqueID) {
 	var seg = *replica.newSegments[segID]
+	log.Debug("new to normal segment", zap.Int64("segmentID", seg.segmentID), zap.Int64("numRows", seg.numRows))
 
 	seg.isNew.Store(false)
 	replica.normalSegments[segID] = &seg
@@ -354,6 +355,7 @@ func (replica *SegmentReplica) addNormalSegment(segID, collID, partitionID Uniqu
 		zap.Int64("collection ID", collID),
 		zap.Int64("partition ID", partitionID),
 		zap.String("channel name", channelName),
+		zap.Int64("numOfRows", numOfRows),
 	)
 
 	seg := &Segment{
@@ -402,6 +404,7 @@ func (replica *SegmentReplica) addFlushedSegment(segID, collID, partitionID Uniq
 		zap.Int64("collection ID", collID),
 		zap.Int64("partition ID", partitionID),
 		zap.String("channel name", channelName),
+		zap.Int64("numOfRows", numOfRows),
 	)
 
 	seg := &Segment{

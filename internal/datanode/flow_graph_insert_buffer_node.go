@@ -465,10 +465,12 @@ func (ibNode *insertBufferNode) updateSegStatesInReplica(insertMsgs []*msgstream
 
 		segNum := uniqueSeg[currentSegID]
 		uniqueSeg[currentSegID] = segNum + int64(len(msg.RowIDs))
+		log.Debug("insert msg", zap.Int64("segmentID", currentSegID), zap.Int64("collID", collID), zap.Int64("numRows", uniqueSeg[currentSegID]))
 	}
 
 	seg2Upload = make([]UniqueID, 0, len(uniqueSeg))
 	for id, num := range uniqueSeg {
+		log.Debug("segment statistics to upload", zap.Int64("segmentID", id), zap.Int64("numRows", num))
 		seg2Upload = append(seg2Upload, id)
 		ibNode.replica.updateStatistics(id, num)
 	}
@@ -581,6 +583,7 @@ func newInsertBufferNode(ctx context.Context, collID UniqueID, flushCh <-chan fl
 		stats := make([]*datapb.SegmentStats, 0, len(segmentIDs))
 		for _, sid := range segmentIDs {
 			stat, err := config.replica.getSegmentStatisticsUpdates(sid)
+			log.Debug("get segment statistics updates", zap.Int64("segmentID", stat.GetSegmentID()), zap.Int64("numRows", stat.GetNumRows()))
 			if err != nil {
 				log.Warn("failed to get segment statistics info", zap.Int64("segmentID", sid), zap.Error(err))
 				continue
